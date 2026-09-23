@@ -25,6 +25,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Floating video stays inside its window on players that center it with a transform, and Netflix subtitles remain visible above the picture.
 - Search opens on macOS 14 again: it quit as it opened, before its window, setting the look chosen in Settings on an application that didn't exist yet. Thanks [@serhiitroinin](https://github.com/serhiitroinin) ([#38](https://github.com/driceroland/Search/pull/38))
 - A column of more tabs than the window holds scrolls between the pinned tabs and its foot, instead of running under the traffic lights and off the bottom of the window; the tab you go to is brought into view. Thanks [@lusqua](https://github.com/lusqua) ([#39](https://github.com/driceroland/Search/pull/39))
 - ⌘T never leaves two empty tabs: an empty tab already open elsewhere in the row comes to its end and opens, with whatever was typed in it and not gone to cleared. ([#35](https://github.com/driceroland/Search/issues/35)) Thanks [@SamarthaB10](https://github.com/SamarthaB10)
