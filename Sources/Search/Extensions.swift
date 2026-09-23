@@ -35,6 +35,88 @@ struct Installed: Codable, Identifiable, Equatable {
     /// For one loaded from a folder: where that folder is, so Reload can
     /// bring the author's latest edits in.
     var source: String? = nil
+    /// Missing means the manifest default; an empty key explicitly clears it.
+    var shortcuts: [String: ExtensionShortcut]? = nil
+}
+
+struct ExtensionShortcut: Codable, Equatable {
+    var key: String
+    var modifiers: UInt
+
+    static let modifierMask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+    var flags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: modifiers).intersection(Self.modifierMask) }
+
+    init(key: String?, flags: NSEvent.ModifierFlags) {
+        self.key = key?.lowercased() ?? ""
+        modifiers = self.key.isEmpty ? 0 : flags.intersection(Self.modifierMask).rawValue
+    }
+
+    static let specialKeys: [UInt16: (String, String)] = [
+        49: (" ", "Space"), 43: (",", ","), 47: (".", "."),
+        123: ("\u{F702}", "←"), 124: ("\u{F703}", "→"),
+        125: ("\u{F701}", "↓"), 126: ("\u{F700}", "↑"),
+        115: ("\u{F729}", "Home"), 119: ("\u{F72B}", "End"),
+        116: ("\u{F72C}", "Page Up"), 121: ("\u{F72D}", "Page Down"), 117: ("\u{F728}", "Delete"),
+        122: ("\u{F704}", "F1"), 120: ("\u{F705}", "F2"), 99: ("\u{F706}", "F3"),
+        118: ("\u{F707}", "F4"), 96: ("\u{F708}", "F5"), 97: ("\u{F709}", "F6"),
+        98: ("\u{F70A}", "F7"), 100: ("\u{F70B}", "F8"), 101: ("\u{F70C}", "F9"),
+        109: ("\u{F70D}", "F10"), 103: ("\u{F70E}", "F11"), 111: ("\u{F70F}", "F12"),
+    ]
+
+    init(event: NSEvent) {
+        // Printable characters belong to the current layout: the US comma
+        // and period positions are Ö and Ç on a Turkish keyboard.
+        let characters = event.charactersIgnoringModifiers ?? ""
+        self.init(key: characters.isEmpty ? Self.specialKeys[event.keyCode]?.0 : characters, flags: event.modifierFlags)
+    }
+
+    /// WebKit's setter asserts, rather than throws, on unsupported keys.
+    var supported: Bool {
+        if key.isEmpty { return true }
+        guard key.utf16.count == 1, let scalar = key.unicodeScalars.first else { return false }
+        return CharacterSet.alphanumerics.contains(scalar) || [",", ".", " "].contains(key)
+            || (0xF700...0xF70F).contains(scalar.value)
+            || (0xF727...0xF729).contains(scalar.value) || (0xF72B...0xF72D).contains(scalar.value)
+    }
+
+    var label: String {
+        guard !key.isEmpty else { return "Not set" }
+        let prefix = [(NSEvent.ModifierFlags.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
+            .filter { flags.contains($0.0) }.map { $0.1 }.joined()
+        return prefix + (Self.specialKeys.values.first { $0.0 == key }?.1 ?? key.uppercased())
+    }
+
+    @MainActor
+    func reserved(keyCode: UInt16? = nil) -> String? {
+        guard !key.isEmpty else { return nil }
+        // Keep these available when Spaces is enabled later as well.
+        if flags == .control, "123456789".contains(key) || keyCode.map({ (ContentView.digits[$0] ?? 0) > 0 }) == true {
+            return "Reserved for switching spaces."
+        }
+        if flags.contains(.command), flags.intersection([.option, .control]).isEmpty {
+            if key == "0" || (!flags.contains(.shift) && ("123456789".contains(key) || keyCode.map { ContentView.digits[$0] != nil } == true)) {
+                return "Used by Search's tab or zoom shortcuts."
+            }
+            if ["=", "+", "-", "\u{F702}", "\u{F703}"].contains(key) {
+                return "Used by Search's navigation or zoom shortcuts."
+            }
+        }
+        if key == "\t", flags.contains(.control), flags.intersection([.command, .option]).isEmpty {
+            return "Used by Search to switch tabs."
+        }
+        func find(in menu: NSMenu?) -> String? {
+            for item in menu?.items ?? [] {
+                if let found = find(in: item.submenu) { return found }
+                var mask = item.keyEquivalentModifierMask.intersection(Self.modifierMask)
+                if item.keyEquivalent != item.keyEquivalent.lowercased() { mask.insert(.shift) }
+                if !item.keyEquivalent.isEmpty, item.keyEquivalent.lowercased() == key, mask == flags {
+                    return "Used by “\(item.title)”."
+                }
+            }
+            return nil
+        }
+        return find(in: NSApp.mainMenu)
+    }
 }
 
 @available(macOS 15.4, *)
@@ -58,6 +140,15 @@ final class Extensions: NSObject, ObservableObject {
     /// Errors an extension's pages and worker ran into, newest last, a few
     /// dozen at most per extension.
     @Published private(set) var errors: [String: [String]] = [:]
+
+    struct ShortcutTarget: Equatable {
+        let extensionID: String
+        let commandID: String
+        var key: String { extensionID + "/" + commandID }
+    }
+    @Published private(set) var recordingShortcut: ShortcutTarget?
+    @Published private(set) var shortcutErrors: [String: String] = [:]
+    private var defaultShortcuts: [String: [String: ExtensionShortcut]] = [:]
 
     func noteError(_ text: String, for id: String) {
         var list = errors[id] ?? []
@@ -228,6 +319,15 @@ final class Extensions: NSObject, ObservableObject {
             // — localStorage, IndexedDB — is filed under its origin.
             if let stable = URL(string: "\(Extensions.scheme)://\(item.id)/") { context.baseURL = stable }
             context.isInspectable = true
+            defaultShortcuts[item.id] = Dictionary(uniqueKeysWithValues: context.commands.map {
+                ($0.id, ExtensionShortcut(key: $0.activationKey, flags: $0.modifierFlags))
+            })
+            for command in context.commands {
+                if let shortcut = item.shortcuts?[command.id], shortcut.supported {
+                    command.activationKey = shortcut.key.isEmpty ? nil : shortcut.key
+                    command.modifierFlags = shortcut.flags
+                }
+            }
             // Installing was the consent: everything it asked for then is
             // granted each time it loads. Optional ones are asked for when
             // the extension asks.
@@ -252,15 +352,22 @@ final class Extensions: NSObject, ObservableObject {
     }
 
     private func unload(_ id: String) {
+        if recordingShortcut?.extensionID == id { cancelShortcutRecording() }
+        defaultShortcuts[id] = nil
+        shortcutErrors = shortcutErrors.filter { !$0.key.hasPrefix(id + "/") }
         guard let context = contexts[id] else { return }
         try? controller.unload(context)
         contexts[id] = nil
         actionsChanged += 1
     }
 
-    private func save() {
-        try? FileManager.default.createDirectory(at: Extensions.folder, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(installed).write(to: Extensions.list, options: .atomic)
+    @discardableResult
+    private func save() -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: Extensions.folder, withIntermediateDirectories: true)
+            try JSONEncoder().encode(installed).write(to: Extensions.list, options: .atomic)
+            return true
+        } catch { return false }
     }
 
     // MARK: - installing
@@ -762,10 +869,102 @@ final class Extensions: NSObject, ObservableObject {
         return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
     }
 
-    /// A keystroke an extension registered for.
+    // MARK: - keyboard shortcuts
+
+    func shortcutCommands(for id: String) -> [WKWebExtension.Command] {
+        (contexts[id]?.commands ?? []).sorted { $0.id < $1.id }
+    }
+
+    func shortcutIssue(_ shortcut: ExtensionShortcut, for target: ShortcutTarget, keyCode: UInt16? = nil) -> String? {
+        guard !shortcut.key.isEmpty else { return nil }
+        if let issue = shortcut.reserved(keyCode: keyCode) { return issue }
+        for item in installed where item.enabled {
+            for command in shortcutCommands(for: item.id) where target != ShortcutTarget(extensionID: item.id, commandID: command.id) {
+                if ExtensionShortcut(key: command.activationKey, flags: command.modifierFlags) == shortcut {
+                    return "Used by \(item.name): \(command.title.isEmpty ? "Open extension" : command.title)."
+                }
+            }
+        }
+        return nil
+    }
+
+    func beginShortcutRecording(_ target: ShortcutTarget) {
+        cancelShortcutRecording()
+        guard contexts[target.extensionID]?.commands.contains(where: { $0.id == target.commandID }) == true else { return }
+        shortcutErrors[target.key] = nil
+        recordingShortcut = target
+    }
+
+    func cancelShortcutRecording() {
+        if let target = recordingShortcut { shortcutErrors[target.key] = nil }
+        recordingShortcut = nil
+    }
+
+    /// Called before Search's own shortcuts, only while the recorder is open.
+    func recordShortcut(_ event: NSEvent) -> Bool {
+        guard let target = recordingShortcut else { return false }
+        if event.keyCode == 53 { cancelShortcutRecording(); return true }
+        if event.keyCode == 48 { cancelShortcutRecording(); return false }
+        if event.isARepeat { return true }
+        let shortcut = ExtensionShortcut(event: event)
+        guard !shortcut.key.isEmpty, shortcut.supported else {
+            shortcutErrors[target.key] = "Use a letter, number, arrow, function key, space, comma or period."
+            return true
+        }
+        guard !shortcut.flags.intersection([.command, .option, .control]).isEmpty else {
+            shortcutErrors[target.key] = "Include ⌘, ⌥ or ⌃ in the shortcut."
+            return true
+        }
+        if let issue = shortcutIssue(shortcut, for: target, keyCode: event.keyCode) {
+            shortcutErrors[target.key] = issue
+            return true
+        }
+        setShortcut(shortcut, for: target)
+        return true
+    }
+
+    /// nil removes the override, restoring the manifest default.
+    func setShortcut(_ override: ExtensionShortcut?, for target: ShortcutTarget) {
+        guard let index = installed.firstIndex(where: { $0.id == target.extensionID }),
+              let command = contexts[target.extensionID]?.commands.first(where: { $0.id == target.commandID }),
+              let shortcut = override ?? defaultShortcuts[target.extensionID]?[target.commandID] else { return }
+        if let issue = shortcutIssue(shortcut, for: target) {
+            shortcutErrors[target.key] = issue
+            return
+        }
+        let previous = installed[index]
+        var overrides = previous.shortcuts ?? [:]
+        overrides[target.commandID] = override
+        installed[index].shortcuts = overrides.isEmpty ? nil : overrides
+        guard save() else {
+            installed[index] = previous
+            shortcutErrors[target.key] = "Couldn't save the shortcut. Try again."
+            return
+        }
+        command.activationKey = shortcut.key.isEmpty ? nil : shortcut.key
+        command.modifierFlags = shortcut.flags
+        cancelShortcutRecording()
+        shortcutErrors[target.key] = nil
+        objectWillChange.send()
+    }
+
+    /// Exact modifiers avoid WebKit matching a weaker shortcut first.
     func take(_ event: NSEvent) -> Bool {
-        for context in contexts.values where context.command(for: event) != nil {
-            return context.performCommand(for: event)
+        guard browser?.active?.shy != true, !event.isARepeat else { return false }
+        let shortcut = ExtensionShortcut(event: event)
+        guard !shortcut.key.isEmpty, shortcut.reserved(keyCode: event.keyCode) == nil else { return false }
+        for item in installed where item.enabled {
+            guard let context = contexts[item.id] else { continue }
+            for command in context.commands where ExtensionShortcut(key: command.activationKey, flags: command.modifierFlags) == shortcut {
+                let target = ShortcutTarget(extensionID: item.id, commandID: command.id)
+                guard shortcutIssue(shortcut, for: target) == nil else { return false }
+                if ["_execute_action", "_execute_browser_action", "_execute_page_action"].contains(command.id) {
+                    press(item.id)
+                } else {
+                    context.performCommand(command)
+                }
+                return true
+            }
         }
         return false
     }

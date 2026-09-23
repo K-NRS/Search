@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Extension keyboard shortcuts can be recorded, cleared and reset in Settings, with saved bindings and conflict checks.
 - A middle-click on a tab closes it, in the row across the top and in the column. A pinned tab is put down, as with ⌘W.
 - Spaces: separate sets of tabs in the one window, each with its own cookies and sign-ins and, if you like, its own downloads folder. Turn them on in Settings › Tabs, then switch with ⌃1–⌃9 or the dot beside the tabs. ([#4](https://github.com/driceroland/Search/issues/4))
 - Rename a tab: Rename in a tab's right-click menu, or Tabs › Rename Tab, types a name over the title in place. The name stays with the tab wherever it goes, and survives a quit; emptying the field gives the page's own title back.

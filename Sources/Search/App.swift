@@ -662,6 +662,10 @@ struct ContentView: View {
     ]
 
     private func take(_ event: NSEvent) -> Bool {
+        if #available(macOS 15.4, *), Extensions.shared.recordingShortcut != nil {
+            if browser.tuning { return Extensions.shared.recordShortcut(event) }
+            Extensions.shared.cancelShortcutRecording()
+        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
@@ -744,8 +748,7 @@ struct ContentView: View {
             return true
         }
 
-        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
-        // none of ours use those.
+        // Extension bindings are checked against Search's reserved shortcuts.
         if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
            Extensions.shared.take(event) {
             return true
