@@ -352,6 +352,7 @@ final class Extensions: NSObject, ObservableObject {
     }
 
     private func unload(_ id: String) {
+        ExtensionOffscreen.close(for: id)
         if recordingShortcut?.extensionID == id { cancelShortcutRecording() }
         defaultShortcuts[id] = nil
         shortcutErrors = shortcutErrors.filter { !$0.key.hasPrefix(id + "/") }

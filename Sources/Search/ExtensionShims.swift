@@ -286,6 +286,10 @@ enum ExtensionShims {
         try { return chrome.extension && typeof chrome.extension.getBackgroundPage === "function" && chrome.extension.getBackgroundPage() === root; }
         catch (e) { return false; }
       })());
+      const manifest = (() => { try { return runtime.getManifest(); } catch (e) { return {}; } })();
+      const backgroundPage = manifest.background || {};
+      const hasWorker = !!(backgroundPage.service_worker || backgroundPage.scripts || backgroundPage.page);
+      const offscreenCapable = [...(manifest.permissions || []), ...(manifest.optional_permissions || [])].includes("offscreen");
       // A script a worker imports that isn't there: Chrome throws at once.
       // WebKit goes looking for it first, and while it does, runs the
       // promises already waiting — code that notes "still starting" until
@@ -339,11 +343,21 @@ enum ExtensionShims {
         if (!event || typeof event.addListener !== "function") return;
         const add = event.addListener.bind(event);
         const remove = event.removeListener.bind(event);
+        const internalMessages = event === runtime.onMessage;
+        const relayHost = internalMessages && offscreenCapable && !hasWorker;
         const listeners = new Set();
         let attached = false;
-        const dispatch = function (message, sender, respond) {
+        const dispatch = function (message, sender, respond, local = false) {
           let settled = false, keep = false;
           const sendResponse = (value) => { if (!settled) { settled = true; respond(value); } };
+          // WebKit excludes the sender's whole page from runtime delivery,
+          // so an offscreen iframe cannot reach its parent directly. Another
+          // context of the same extension carries that delivery to the browser.
+          if (!local && message && message.__searchOffscreenRelay === true && sender.id === runtime.id) {
+            native("offscreen.sendMessage", [message.token, message.message, sender])
+              .then(sendResponse, (error) => sendResponse({ relayError: String(error) }));
+            return true;
+          }
           // Only the worker answers; any other page stays out of it.
           if (message && message.__searchPing === true) {
             if (background) { sendResponse("pong"); return; }
@@ -376,32 +390,72 @@ enum ExtensionShims {
             else if (result && typeof result.then === "function") { keep = true; result.then(sendResponse, () => sendResponse(undefined)); }
           }
           if (keep || settled) return keep && !settled ? true : undefined;
-          // Nothing here answers it. In Chrome that leaves the question to
-          // the extension's other pages and its worker; WebKit takes the
-          // first reply from any of them, and an empty one from a page that
-          // only listens for something else — an offscreen document, an
-          // options page — would arrive before the worker's real answer. So
-          // a page that has nothing to say steps aside, and says nothing
-          // only once everyone else has had ample time.
-          if (!background && !inContent) { setTimeout(() => sendResponse(undefined), 10000); return true; }
+          // Decline without calling sendResponse. Even an explicit undefined
+          // is a real reply in WebKit and can beat another context's answer.
           return undefined;
         };
+        if (internalMessages) {
+          put(root, "__searchOffscreenDispatch", (message, sender) => new Promise((resolve) => {
+            const timer = setTimeout(() => resolve({ handled: false }), 30000);
+            const done = (result) => { clearTimeout(timer); resolve(result); };
+            const waiting = dispatch(message, sender, (value) => done({ handled: true, value }), true);
+            if (waiting !== true) done({ handled: false });
+          }));
+        }
         put(event, "addListener", (listener) => {
           listeners.add(listener);
           if (!attached) { attached = true; add(dispatch); }
         });
         put(event, "removeListener", (listener) => {
           listeners.delete(listener);
-          if (attached && listeners.size === 0) { attached = false; remove(dispatch); }
+          if (attached && listeners.size === 0 && !(internalMessages && (background || relayHost))) {
+            attached = false; remove(dispatch);
+          }
         });
         put(event, "hasListener", (listener) => listeners.has(listener));
         put(event, "hasListeners", () => listeners.size > 0);
         // A worker may only add listeners while it starts; one that adds its
         // first later would be refused. So in a worker the one listener is
         // WebKit's from the start.
-        if (background) { attached = true; add(dispatch); }
+        if (background || relayHost) { attached = true; add(dispatch); }
       };
-      if (inContent) return;
+      if (inContent) {
+        if (offscreenCapable && window !== window.top && runtime && typeof runtime.sendMessage === "function") {
+          const send = runtime.sendMessage.bind(runtime);
+          let sequence = 0;
+          const prefix = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join("-");
+          put(runtime, "sendMessage", (...args) => {
+            const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
+            const options = args[1];
+            const isOptions = options == null || (typeof options === "object" && !Array.isArray(options)
+              && Object.keys(options).every((key) => key === "includeTlsChannelId"));
+            const explicit = args.length >= 3 || (args.length === 2 && typeof args[0] === "string" && !isOptions);
+            const own = !explicit || !args[0] || args[0] === runtime.id;
+            const original = send(...args);
+            let answer = original;
+            if (own && args.length) {
+              const relay = send({ __searchOffscreenRelay: true, token: prefix + ":" + (++sequence),
+                message: args[explicit ? 1 : 0] }).then((reply) => {
+                  if (reply && reply.relayError) throw new Error(reply.relayError);
+                  return reply && reply.handled ? reply.value : undefined;
+                });
+              // An empty native reply must not beat the parent document's
+              // reply. Preserve the first actual response from either route.
+              answer = new Promise((resolve, reject) => {
+                let left = 2, failure;
+                const done = (value) => {
+                  if (value !== undefined) resolve(value);
+                  if (--left === 0) failure ? reject(failure) : resolve(undefined);
+                };
+                for (const response of [original, relay]) response.then(done, (error) => { failure = error; done(); });
+              });
+            }
+            if (!callback) return answer;
+            answer.then(callback, (error) => withLastError(error, callback));
+          });
+        }
+        return;
+      }
 
       // In a website's frame, everything WebKit keeps to the extension's own
       // process goes through the worker instead. What stays direct is what
@@ -481,7 +535,6 @@ enum ExtensionShims {
         // nothing, for good. So after waking it, a page asks the worker
         // itself (its shim answers) at most every few seconds; no answer,
         // and the browser takes the extension up afresh.
-        const hasWorker = (() => { try { const b = runtime.getManifest().background || {}; return !!(b.service_worker || b.scripts || b.page); } catch (e) { return false; } })();
         // The message itself doesn't wait on the answer: a worker busy
         // starting up can take seconds. An empty reply means gone; silence
         // for a quarter of a minute does too.
@@ -1879,8 +1932,6 @@ enum ExtensionShims {
     /// button should open it.
     static var panelPath: [String: String] = [:]
     static var panelOnClick: Set<String> = []
-    /// Offscreen documents, one per extension, as Chrome allows.
-    static var offscreen: [String: WKWebView] = [:]
     /// One voice for every extension that reads aloud.
     static let speaker = NSSpeechSynthesizer()
 
@@ -2063,19 +2114,19 @@ enum ExtensionShims {
 
         // MARK: offscreen — a page with a DOM for a worker that has none
         case "offscreen.createDocument":
-            guard offscreen[id] == nil else { throw Unsupported(what: "Only a single offscreen document may be created.") }
-            guard let path = (first as? [String: Any])?["url"] as? String,
-                  let configuration = context.webViewConfiguration
+            guard let path = (first as? [String: Any])?["url"] as? String
             else { throw Unsupported(what: "No page for the offscreen document") }
-            let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-            page.load(URLRequest(url: context.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))))
-            offscreen[id] = page
+            try await ExtensionOffscreen.create(path, for: context)
             return nil
         case "offscreen.closeDocument":
-            offscreen[id] = nil
+            ExtensionOffscreen.close(for: id)
             return nil
         case "offscreen.hasDocument":
-            return offscreen[id] != nil
+            return ExtensionOffscreen.hasDocument(for: id)
+        case "offscreen.sendMessage":
+            guard args.count == 3, let token = first as? String,
+                  let sender = args[2] as? [String: Any] else { return ["handled": false] }
+            return try await ExtensionOffscreen.send(args[1], sender: sender, token: token, for: id)
 
         // MARK: fonts — what the Mac has; the page's own fonts stay the page's
         case "fontSettings.getFontList":
@@ -2111,7 +2162,7 @@ enum ExtensionShims {
             return ["isReliable": (guesses.values.max() ?? 0) > 0.6,
                     "languages": guesses.sorted { $0.value > $1.value }.map { ["language": $0.key.rawValue, "percentage": Int($0.value * 100)] }]
         case "runtime.getContexts":
-            return []
+            return ExtensionOffscreen.contexts(for: id, matching: first as? [String: Any] ?? [:])
 
         // MARK: notifications — the Mac's own
         case "notifications.create":
