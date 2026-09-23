@@ -66,7 +66,8 @@ enum Web {
 
 @MainActor
 final class Tab: ObservableObject, Identifiable {
-    let id = UUID()
+    let id: UUID
+    @Published var groupID: UUID?
 
     /// The page. Built the first time anyone asks for it, not when the tab
     /// is — a session of twenty tabs coming back is twenty objects, not
@@ -278,7 +279,8 @@ final class Tab: ObservableObject, Identifiable {
         return "New Tab"
     }
 
-    init(shy: Bool = false, bench: Bool = false, configuration: WKWebViewConfiguration? = nil) {
+    init(id: UUID = UUID(), shy: Bool = false, bench: Bool = false, configuration: WKWebViewConfiguration? = nil) {
+        self.id = id
         self.shy = shy
         self.bench = bench
         self.configuration = configuration ?? Web.configuration(shy: shy)

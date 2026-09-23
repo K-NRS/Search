@@ -22,6 +22,7 @@ struct SearchApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { browser.newTab() }
                     .keyboardShortcut("t")
+                Button("New Tab Group…") { browser.askForGroup() }
                 Button("New Private Tab") { browser.newShyTab() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Reopen Closed Tab") { browser.reopen() }
@@ -662,6 +663,7 @@ struct ContentView: View {
     ]
 
     private func take(_ event: NSEvent) -> Bool {
+        guard NSApp.modalWindow == nil, Links.window?.attachedSheet == nil else { return false }
         if #available(macOS 15.4, *), Extensions.shared.recordingShortcut != nil {
             if browser.tuning { return Extensions.shared.recordShortcut(event) }
             Extensions.shared.cancelShortcutRecording()

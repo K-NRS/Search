@@ -232,6 +232,14 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "organize-ui":
+            guard Store.testing else { answer(["error": "organize-ui requires a test run"]); return }
+            answer(browser.groupingNative(request))
+
+        case "organize":
+            guard Store.testing else { answer(["error": "organize requires a test run"]); return }
+            answer(browser.groupingCommand(request))
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 

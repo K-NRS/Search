@@ -33,7 +33,6 @@ don't build it twice.
 - [ ] **Driving Search from an agent** (an MCP server over the bench), for automation and testing. *(X, [#14](https://github.com/driceroland/Search/pull/14))*
 - [ ] **Web push notifications**, as far as WebKit lets an app other than Safari have them. *(X)*
 - [ ] **Smoother scrolling with a mouse wheel.** To look into. *(X)*
-- [ ] **Tab groups.** To weigh against keeping the sidebar quiet, now that there are Spaces. *(X, [#31](https://github.com/driceroland/Search/pull/31))*
 - [ ] **A title bar in the page's colour**, as an option, without bringing back the toolbar. *([#25](https://github.com/driceroland/Search/pull/25))*
 
 ## Not on the list, for now
