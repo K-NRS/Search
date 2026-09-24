@@ -16,7 +16,7 @@ in [ROADMAP.md](ROADMAP.md).
 - Updates can wait for you: Settings › About › Install updates on its own, on as before. Switched off, Search still looks once a day and says when a newer version is out, and fetches, checks and installs it only when you press Install.
 ### Fixed
 
-- Extensions can use an offscreen document to read a page without opening a visible tab. Creation waits until it is ready, framed content scripts can reply to it, and reloading or disabling the extension closes it.
+- Bitwarden signs in to a self-hosted server. An extension's popup, and the page its "pop out" opens in a tab, now hear what changes while they are open: WebKit sent them no events at all, so Bitwarden's popup never learnt that its server had changed, and signed in to bitwarden.com, where a self-hosted account doesn't exist, until it was opened again.
 - A mouse wheel scrolls pages that listen to the wheel themselves, as carousels and x.com do: Search stopped pages bouncing past their top and bottom with a style of its own, and together with such a listener WebKit dropped the wheel's steps. The bounce is now turned off by WebKit itself, the page's styles untouched, and the sideways bounce stays for swiping back and forward. Thanks [@olllayor](https://github.com/olllayor) ([#194](https://github.com/driceroland/Search/pull/194)). Fixes [#180](https://github.com/driceroland/Search/issues/180)
 - An account picked from the list under a sign-in field is filled only into the page it was offered for.
 - History opens at once with a long past: with two thousand pages the panel took a third of a second to come up, and a second the first time, while it made every line at once and looked on disk for each site's icon. Now it makes only the lines in view, works out its days once, and remembers which sites have no icon. Escape already closes it (#70). ([#67](https://github.com/driceroland/Search/issues/67))
@@ -37,6 +37,7 @@ in [ROADMAP.md](ROADMAP.md).
 - History keeps two articles or two videos of the same site apart: an address's query (`?id=`, `?v=`) is part of what makes it a page of its own, so the second Hacker News story or YouTube video you open no longer takes the first one's place. Thanks [@yuxino](https://github.com/yuxino) ([#154](https://github.com/driceroland/Search/pull/154))
 - A video put full screen, on YouTube and the like, fills the screen with its picture rather than black with the sound playing on. Thanks [@StefanTodorov32](https://github.com/StefanTodorov32) ([#220](https://github.com/driceroland/Search/pull/220))
 - The back, forward and reload buttons have a little room between them. Thanks [@DagimAlemayehuu](https://github.com/DagimAlemayehuu) ([#209](https://github.com/driceroland/Search/pull/209)), and [@olllayor](https://github.com/olllayor) for asking ([#185](https://github.com/driceroland/Search/issues/185))
+- Extensions can use an offscreen document to read a page without opening a visible tab. Creation waits until it is ready, framed content scripts can reply to it, and reloading or disabling the extension closes it.
 
 ## 1.0.2 — 24 September 2026
 
