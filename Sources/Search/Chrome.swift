@@ -77,4 +77,3 @@ final class BackgroundBlurView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
-

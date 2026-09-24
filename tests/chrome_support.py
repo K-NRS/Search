@@ -165,4 +165,3 @@ class Run:
         if self.log:
             self.log.close()
             self.log = None
-
