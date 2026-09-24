@@ -51,8 +51,15 @@ enum ExtensionShims {
         SHA256.hash(data: Data((script + PasskeyRelay.page).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
     }()
 
-    nonisolated static func prepare(_ folder: URL) throws {
+    /// `fresh`: a package just unpacked or copied in. What only Search writes
+    /// beside an extension — which permissions it added, which shim it
+    /// carries — is Search's to say, never the package's: anything by those
+    /// names that came inside it goes before a word of it is read.
+    nonisolated static func prepare(_ folder: URL, fresh: Bool = false) throws {
         let files = FileManager.default
+        if fresh {
+            for name in [stamp, ".search-added"] { try? files.removeItem(at: folder.appendingPathComponent(name)) }
+        }
         let stampURL = folder.appendingPathComponent(stamp)
         if (try? String(contentsOf: stampURL, encoding: .utf8)) == version { return }
         defer { try? version.write(to: stampURL, atomically: true, encoding: .utf8) }
@@ -2305,6 +2312,8 @@ enum ExtensionShims {
         "topSites": "topSites",
         "browsingData": "browsingData",
         "readingList": "readingList",
+        "userScripts": "userScripts",
+        "identity": "identity",
     ]
 
     /// What this extension asked for: the names in its manifest and any
@@ -2322,7 +2331,17 @@ enum ExtensionShims {
         let first = args.first
         let id = context.uniqueIdentifier
 
-        if api.hasPrefix("setting.") { return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner) }
+        if api.hasPrefix("setting.") {
+            // A browser setting (chrome.privacy…) belongs to the family its
+            // name starts with, and only an extension that asked for that
+            // family may read or change it, as in Chrome.
+            let name = api.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            let family = String(name.prefix(while: { $0 != "." }))
+            guard !family.isEmpty, allowed(id, context: context).contains(family) else {
+                throw Unsupported(what: "The extension never asked for \u{201C}\(family)\u{201D}")
+            }
+            return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner)
+        }
 
         // What leaves this app is answered here, not in the injected script:
         // the shim runs beside the extension's own code, so its checks stop
@@ -2903,7 +2922,10 @@ enum ExtensionShims {
             if let inline = source["code"] as? String {
                 code += inline + "\n;\n"
             } else if let file = source["file"] as? String,
-                      let text = try? String(contentsOf: folder.appendingPathComponent(file.trimmingCharacters(in: CharacterSet(charactersIn: "/"))), encoding: .utf8) {
+                      // One of the extension's own files, and nothing outside
+                      // its folder: a name is resolved before it is read.
+                      let path = inside(file, of: folder),
+                      let text = try? String(contentsOf: path, encoding: .utf8) {
                 code += text + "\n;\n"
             }
         }
@@ -3096,7 +3118,7 @@ enum ExtensionAuth {
     /// tab the flow was started in may finish it, or a window that tab's
     /// page opened, since some providers finish the sign-in in a popup.
     static func intercept(_ url: URL, browser: Browser, from webView: WKWebView) -> Bool {
-        guard let host = url.host()?.lowercased(), host.hasSuffix(".chromiumapp.org") else { return false }
+        guard url.scheme?.lowercased() == "https", let host = url.host()?.lowercased(), host.hasSuffix(".chromiumapp.org") else { return false }
         let id = String(host.dropLast(".chromiumapp.org".count))
         guard let entry = waiting[id], let from = browser.tab(for: webView),
               from.id == entry.tab || from.opener == entry.tab

@@ -242,10 +242,15 @@ final class Updater: ObservableObject {
     }
 
     /// An address from the feed: https, unless the feed itself was pointed
-    /// at a test server.
+    /// at a test server, and on the feed's own host. The ZIP is checked
+    /// again by hash and signature before it is ever run, but the DMG is
+    /// only ever offered, under the app's own "is out" line - so a feed
+    /// that a compromised host or a hijacked DNS answer could redirect must
+    /// not be able to point that line at some other address.
     private static func link(_ value: Any?) -> URL? {
         guard let url = (value as? String).flatMap(URL.init(string:)) else { return nil }
         guard url.scheme == "https" || (overridden && url.scheme == "http") else { return nil }
+        guard url.host == feed.host else { return nil }
         return url
     }
 }
@@ -289,9 +294,9 @@ private enum Swap {
 
         let zip = scratch.appendingPathComponent("Search.zip")
         try await download(release.archive, to: zip)
-        if let expected = release.sha256 {
-            guard try digest(of: zip) == expected else { throw Refused.hash }
-        }
+        // A feed with no checksum is refused as a wrong one would be: build.sh
+        // always writes it, so one missing is a feed that isn't ours.
+        guard let expected = release.sha256, try digest(of: zip) == expected else { throw Refused.hash }
         let unpacked = scratch.appendingPathComponent("unpacked", isDirectory: true)
         try extract(zip, into: unpacked)
         guard let fresh = try files.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil)
@@ -342,7 +347,11 @@ private enum Swap {
 
     /// A bundle is not trusted because it arrived. It is trusted because it
     /// is this app, newer, with a signature that holds up under the strict
-    /// check for every architecture, from the same team as the one running.
+    /// check for every architecture and meets Developer ID's requirement:
+    /// a certificate chain that ends at Apple's root, through Apple's
+    /// Developer ID authority, issued to the same team as the one running.
+    /// A Team ID read from the signature alone is only what the certificate
+    /// says, and anyone can make a certificate that says it.
     private static func verify(_ bundle: URL, team: String) throws {
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
         guard let data = try? Data(contentsOf: plist),
@@ -358,9 +367,25 @@ private enum Swap {
         guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code else {
             throw Refused.unsigned
         }
-        let strict = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures)
-        guard SecStaticCodeCheckValidity(code, strict, nil) == errSecSuccess else { throw Refused.unsigned }
+        guard let identifier = Bundle.main.bundleIdentifier, let requirement = developerID(team: team, identifier: identifier)
+        else { throw Refused.unsigned }
+        let strict = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode)
+        guard SecStaticCodeCheckValidity(code, strict, requirement) == errSecSuccess else { throw Refused.unsigned }
         guard teamID(of: bundle) == team else { throw Refused.wrongTeam }
+    }
+
+    /// The requirement every Developer ID app from this team meets, the one
+    /// `codesign -d -r-` prints for a shipped Search: Apple's anchor, the
+    /// Developer ID intermediate (…6.2.6) and a Developer ID Application
+    /// leaf (…6.1.13), with this team in it, for this bundle id.
+    static func developerID(team: String, identifier: String) -> SecRequirement? {
+        let text = "anchor apple generic and identifier \"\(identifier)\""
+            + " and certificate 1[field.1.2.840.113635.100.6.2.6]"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+            + " and certificate leaf[subject.OU] = \"\(team)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else { return nil }
+        return requirement
     }
 
     /// The team that signed a bundle, as the system reads it — nil for an

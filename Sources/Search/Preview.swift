@@ -34,7 +34,7 @@ extension Browser {
     }
 
     func receiveExternal(_ url: URL) {
-        if prefs.miniLinks {
+        if prefs.miniLinks, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             openMini(url)
         } else {
             arrive(url)

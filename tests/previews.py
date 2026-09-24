@@ -128,6 +128,8 @@ class Previews(SUITE['Run']):
         child = created[0]['id']
         self.page(child, '/popup')
         self.check(self.js(child, 'window.opener != null'), 'popup preserves its live window.opener')
+        self.check(not self.preview('controllers', source=source, id=child)['shared'],
+                   'popup has its own native content controller and cannot remove opener handlers')
         self.js(source, "window.popupMessage=null; addEventListener('message',event=>{if(event.data.previewPopup)window.popupMessage=event.data.previewPopup}); true")
         self.js(child, "window.opener.postMessage({previewPopup:'alive'}, '*'); true")
         deadline = time.monotonic() + 10

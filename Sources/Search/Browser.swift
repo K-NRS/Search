@@ -356,10 +356,25 @@ final class Browser: NSObject, ObservableObject {
         relist()
     }
 
+    /// A password copied is asked for the way one shown is. It goes on this
+    /// Mac's clipboard only, not to your other devices', marked concealed
+    /// and transient, which is what clipboard managers go by to keep it out
+    /// of their history, and it is taken off again after a minute and a
+    /// half unless something else has been copied since.
     func copy(_ login: Login) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(login.password, forType: .string)
-        announce("Password copied")
+        Vault.prove("copy the password for \(login.host)") { [weak self] ok in
+            guard ok, let self else { return }
+            let board = NSPasteboard.general
+            board.prepareForNewContents(with: .currentHostOnly)
+            board.setString(login.password, forType: .string)
+            board.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            board.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            let copied = board.changeCount
+            DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+                if board.changeCount == copied { board.clearContents() }
+            }
+            announce("Password copied")
+        }
     }
 
     /// What came back from another browser's store, put in the keychain.
@@ -740,7 +755,11 @@ final class Browser: NSObject, ObservableObject {
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
         if #available(macOS 15.4, *) { Extensions.shared.start(for: self) }
-        if prefs.bench { Bench.shared.start(for: self) }
+        if prefs.bench {
+            Bench.shared.start(for: self)
+        } else if prefs.benchRefused {
+            announce("“Let a script drive Search” was turned on outside Settings, and stays off")
+        }
         welcoming = !prefs.welcomed
         // Asked to stay out of the way: it starts that way (see Fold.swift).
         folded = prefs.sidebar && prefs.sideHides
@@ -1987,8 +2006,33 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if ["http", "https", "file", "about", "data", "blob", "chrome-extension", "webkit-extension"].contains(scheme) {
             decisionHandler(.allow)
         } else {
-            NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
+            handOff(url, scheme: scheme, action: action, from: webView)
+        }
+    }
+
+    /// An address for another app — mail, a call, a meeting. Only the page
+    /// itself may ask, or a click inside one of its frames; a frame that
+    /// asks on its own (an advertisement, say) is ignored. And the other app
+    /// opens only once you have said so, as in Safari — except a mail or
+    /// phone link you just clicked on, which is exactly what it says.
+    private func handOff(_ url: URL, scheme: String, action: WKNavigationAction, from webView: WKWebView) {
+        let clicked = action.navigationType == .linkActivated
+        guard action.targetFrame?.isMainFrame ?? true || clicked else { return }
+        guard let app = NSWorkspace.shared.urlForApplication(toOpen: url) else { return }
+        if clicked, ["mailto", "tel"].contains(scheme) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let name = FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")
+        let alert = NSAlert()
+        alert.messageText = "Open \u{201C}\(name)\u{201D}?"
+        alert.informativeText = "\(webView.url?.host() ?? "This page") wants to open \(name)."
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        Dialogs.show(alert, over: webView) { answer in
+            guard answer == .alertFirstButtonReturn else { return }
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -2001,6 +2045,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        // WebKit's copy of the opener's configuration still holds the
+        // opener's user content controller — its scripts and its message
+        // handlers. Shared, the new tab claimed the opener's handlers as its
+        // own, and closing or sleeping it took them off the opener's page:
+        // right-click on a picture on X, after following a link out of it,
+        // did nothing at all. Each tab gets a controller of its own.
+        configuration.userContentController = WKUserContentController()
         if let source = tab(for: webView), source.surface != .tab {
             return openPreviewPopup(configuration: configuration, source: source, url: action.request.url).web
         }
@@ -2032,6 +2083,16 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // youtube.com and some servers do on their redirects.
         if let http = response.response as? HTTPURLResponse, (300...399).contains(http.statusCode) {
             decisionHandler(.allow)
+            return
+        }
+        // A server that says "attachment" means a file to keep, even one
+        // WebKit could show. Gmail's download button loads the attachment
+        // into a hidden frame and counts on exactly that: a PDF shown there
+        // instead was the button doing nothing at all.
+        if let http = response.response as? HTTPURLResponse,
+           let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
+           disposition.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("attachment") {
+            decisionHandler(.download)
             return
         }
         decisionHandler(response.canShowMIMEType ? .allow : .download)

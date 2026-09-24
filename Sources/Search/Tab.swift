@@ -439,9 +439,10 @@ final class Tab: ObservableObject, Identifiable {
         web.navigationDelegate = delegate
         web.uiDelegate = delegate
 
-        // A tab opened by a link inherits its opener's configuration, handlers
-        // included, so each name is cleared before being claimed — registering
-        // one twice is a hard crash rather than an error.
+        // Each name is cleared before being claimed — registering one twice is
+        // a hard crash rather than an error. A tab opened by a link gets a
+        // controller of its own (Browser's createWebViewWith), never its
+        // opener's.
         let controller = web.configuration.userContentController
         Web.release(controller)
         controller.add(relay, contentWorld: Web.world, name: ScrollRelay.name)
@@ -754,7 +755,7 @@ final class Tab: ObservableObject, Identifiable {
         picture = nil
         cover = nil
         adoptIcon()
-        web.load(URLRequest(url: url))
+        web.open(url)
     }
 
     /// Brought back from the last session: everything the row needs to draw it,
@@ -917,12 +918,12 @@ final class Tab: ObservableObject, Identifiable {
         if let state {
             view.interactionState = state
         } else {
-            view.load(URLRequest(url: url))
+            view.open(url)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self else { return }
             guard built?.url?.absoluteString != "about:blank" else {
-                web.load(URLRequest(url: url))
+                web.open(url)
                 return
             }
             web.evaluateJavaScript("document.readyState") { [weak self] _, error in
@@ -931,7 +932,7 @@ final class Tab: ObservableObject, Identifiable {
                     guard error.domain == WKErrorDomain,
                           error.code == WKError.webContentProcessTerminated.rawValue
                     else { return }
-                    self.web.load(URLRequest(url: url))
+                    self.web.open(url)
                 }
             }
         }
@@ -952,7 +953,7 @@ final class Tab: ObservableObject, Identifiable {
         // A view with no document behind an address: whatever emptied it, the
         // address is what to show, and reload alone would have nothing to do.
         if hollow, let address {
-            web.load(URLRequest(url: address))
+            web.open(address)
             return
         }
         web.evaluateJavaScript("document.readyState") { [weak self] _, error in
@@ -1019,7 +1020,7 @@ final class Tab: ObservableObject, Identifiable {
         // the reload.
         guard !wake() else { return }
         if hollow, let address {
-            web.load(URLRequest(url: address))
+            web.open(address)
         } else {
             web.reloadFromOrigin()
         }
@@ -1638,6 +1639,18 @@ final class ScrollRelay: NSObject, WKScriptMessageHandler {
 
 
 extension WKWebView {
+    /// An address, or a file on this Mac. WebKit reads a file only when told
+    /// which folder the page may read from, and loads nothing at all
+    /// otherwise: an .html double-clicked in the Finder, once Search is the
+    /// Mac's browser, opened a tab that stayed empty.
+    func open(_ url: URL) {
+        if url.isFileURL {
+            loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        } else {
+            load(URLRequest(url: url))
+        }
+    }
+
     /// JavaScript run in Search's own world (see Web.world), where its page
     /// scripts are, answered the way `evaluateJavaScript` answers: the value,
     /// or nil for none or an error.

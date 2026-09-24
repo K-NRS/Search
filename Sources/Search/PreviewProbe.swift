@@ -26,6 +26,9 @@ enum PreviewProbe {
         }
         let url = (request["url"] as? String).flatMap(URL.init(string:))
         switch request["action"] as? String ?? "state" {
+        case "controllers":
+            guard let source = tab("source"), let child = tab("id") else { return ["error": "source and child required"] }
+            return ["shared": source.web.configuration.userContentController === child.web.configuration.userContentController]
         case "state", "main-state": break
         case "mini": _ = browser.openMini(url, source: tab("source"))
         case "peek":

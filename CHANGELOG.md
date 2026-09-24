@@ -14,8 +14,17 @@ in [ROADMAP.md](ROADMAP.md).
 ### Added
 
 - Mini windows for external links and quick searches (⌥⌘N). Move to Tab (⌘O) preserves the live page and its original space. Automatic external-link Mini windows and previews from pinned tabs to another host default on, with separate switches in Settings › General; manual Mini and Shift-click Peek remain available with those switches off.
+
+### Fixed
+
+- The tab bar folded away with ⌘S comes back over the page on a ground of its own, as the column does: the page no longer shows through between the tabs, and its shadow falls along the bar's edge instead of from every title and icon.
+
+## 1.0.2 — 24 September 2026
+
+### Added
+
 - A bookmarks bar, as in Chrome and Safari: your bookmarks in a row above the page, folders opening as menus. Off unless turned on, in Settings › Tabs › Show the bookmarks bar or Bookmarks › Show Bookmarks Bar; it folds away with the tabs.
-- Peek at a link, as in Arc: shift-click it and its page opens in a panel over the one you are reading. Escape, ⌘W or a click beside it puts it away; its other button keeps it as a tab beside this one, without loading it again. Thanks [@beyondbriks](https://x.com/beyondbriks) for the idea
+- Peek at a link, as in Arc: shift-click it and its page opens in a panel over the one you are reading. Escape, ⌘W or a click beside it puts it away; its other button keeps it as a tab beside this one, without loading it again. Off unless turned on: Settings › General › Peek at a link with a shift-click. Thanks [@beyondbriks](https://x.com/beyondbriks) for the idea
 - The video that comes out into its floating window when you leave its tab (YouTube and the like) can be kept in its tab: Settings › General › Float the video when you switch tabs, on as before. ⇧⌘P still floats one by hand. Thanks [@mihsanbudiman](https://x.com/mihsanbudiman) for asking
 - The site you are on, in a card: click the tab you are on to change its address, and a card comes up under it with whether the connection is private (a step in shows the certificate), Copy Address, Print and the page's zoom. It goes as soon as you type. Right-click a tab › Site Information… opens it too. In the column and in the bar across the top alike, with nothing added to either. The card is from [@kndpt](https://github.com/kndpt)'s address bar ([#56](https://github.com/driceroland/Search/pull/56)), which stayed out: Search has the column or the bar, never a second row over the page.
 - Mute a tab and let it play on: press the speaker at the end of a tab that plays sound, or pick Mute Tab in its right-click menu. A muted tab keeps a crossed-out speaker, to be heard again the same way. Thanks [@merttopuz](https://github.com/merttopuz) ([#61](https://github.com/driceroland/Search/pull/61))
@@ -37,6 +46,9 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- A page on this Mac opens: an .html or .xhtml file double-clicked in the Finder, once Search is the Mac's browser, opened Search and nothing else. It now comes up in a tab, with the files beside it it asks for.
+- Gmail's download button downloads the attachment again, a PDF included: a file the server sends as an attachment is now always saved, as in Safari and Chrome, where Search showed it instead whenever WebKit could — out of sight, in the hidden frame Gmail loads it into, so the button seemed to do nothing.
+- Right-click on a picture works again in a tab you had followed a link out of: closing or putting to sleep the tab the link opened took Search's page scripts away from the first one, so the right-click menu on an image (X's photos, for one) showed nothing at all, and saved passwords, the swipe back and hidden elements stopped answering there too.
 - The back and forward buttons of a Logitech mouse set up in Logi Options+ (an MX Master among them) navigate the page: Options+ sends them as a swipe, not as mouse buttons, and Search only listened for the buttons. Thanks [@ductan2](https://github.com/ductan2) ([#169](https://github.com/driceroland/Search/pull/169))
 - Pages no longer see anything of Search that Safari doesn't show them. They could see the messages Search's own scripts send to the app (`window.webkit`, which Safari never exposes) and the variables those scripts kept: the mark of an app's embedded web view rather than a browser, which Google answered with a CAPTCHA every few searches, and some sign-ins with "This browser or app may not be secure". Search's scripts now run in a world of their own beside the page, out of its sight; 1.0.1 also claimed Safari 26.5 on every Mac, where it now names the Safari the Mac has. ([#26](https://github.com/driceroland/Search/issues/26))
 - Going back or forward with two fingers on the trackpad takes a shorter swipe (70 points instead of 110), and a quick flick is enough, as in Safari. Thanks [@mihsanbudiman](https://x.com/mihsanbudiman) for the report
