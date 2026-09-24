@@ -60,6 +60,11 @@ struct SettingsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
         .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
+        .onChange(of: page) { _, _ in prefs.cancelTabShortcutRecording() }
+        .onDisappear { prefs.cancelTabShortcutRecording() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            prefs.cancelTabShortcutRecording()
+        }
     }
 
     // MARK: - the rail
@@ -283,6 +288,38 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.sleepsTabs)
             }
             Rule()
+            ForEach(TabDirection.allCases) { direction in
+                Line(direction.title, prefs.recordingTabShortcut == direction
+                     ? "Press a shortcut. Escape cancels."
+                     : "Cycle by last used in this space.") {
+                    Button(prefs.recordingTabShortcut == direction ? "Press keys…" : prefs.tabShortcut(for: direction).label) {
+                        prefs.tabShortcutError = nil
+                        prefs.recordingTabShortcut = prefs.recordingTabShortcut == direction ? nil : direction
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Change \(direction.title) shortcut")
+                    .accessibilityValue(prefs.tabShortcut(for: direction).label)
+                }
+                Rule()
+            }
+            if let error = prefs.tabShortcutError {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
+            Line("Default shortcuts", "Control-Tab and Control-Shift-Tab") {
+                Button("Reset") { prefs.resetTabShortcuts() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Reset Tab Shortcuts")
+                    .disabled(prefs.nextTabShortcut == TabDirection.next.standard
+                              && prefs.previousTabShortcut == TabDirection.previous.standard
+                              && prefs.recordingTabShortcut == nil)
+            }
+            Rule()
             Line("Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.") {
                 Switch(on: $prefs.usesSpaces)
             }
@@ -446,7 +483,7 @@ struct SettingsPanel: View {
                 Rule()
                 Shortcut("⇧⌘V", "Paste and go")
                 Rule()
-                Shortcut("⌃⇥  ⌘1–9", "Next tab, a tab by its place")
+                Shortcut("\(prefs.nextTabShortcut.label)  ⌘1–9", "Next tab, a tab by its place")
                 Rule()
                 Shortcut("⇧⌘S", "Tabs in a sidebar")
                 Rule()

@@ -13,6 +13,8 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Next Tab and Previous Tab can be remapped in Settings › Tabs, with Control-Tab and Control-Shift-Tab as defaults. Cycling follows last-used order within a space; holding the modifier walks older tabs, and separate presses toggle the two most recently used tabs.
+
 - A bookmarks bar, as in Chrome and Safari: your bookmarks in a row above the page, folders opening as menus. Off unless turned on, in Settings › Tabs › Show the bookmarks bar or Bookmarks › Show Bookmarks Bar; it folds away with the tabs.
 - Peek at a link, as in Arc: shift-click it and its page opens in a panel over the one you are reading. Escape, ⌘W or a click beside it puts it away; its other button keeps it as a tab beside this one, without loading it again. Off unless turned on: Settings › General › Peek at a link with a shift-click. Thanks [@beyondbriks](https://x.com/beyondbriks) for the idea
 - The video that comes out into its floating window when you leave its tab (YouTube and the like) can be kept in its tab: Settings › General › Float the video when you switch tabs, on as before. ⇧⌘P still floats one by hand. Thanks [@mihsanbudiman](https://x.com/mihsanbudiman) for asking

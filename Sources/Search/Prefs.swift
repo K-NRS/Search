@@ -66,6 +66,20 @@ final class Preferences: ObservableObject {
     @Published var sleepsTabs: Bool {
         didSet { store.set(sleepsTabs, forKey: "tabs.sleep") }
     }
+    @Published var nextTabShortcut: TabShortcut {
+        didSet {
+            store.set(try? JSONEncoder().encode(nextTabShortcut), forKey: "shortcut.tab.next")
+            nextTabShortcut.updateMenu(in: NSApp.mainMenu, title: TabDirection.next.title)
+        }
+    }
+    @Published var previousTabShortcut: TabShortcut {
+        didSet {
+            store.set(try? JSONEncoder().encode(previousTabShortcut), forKey: "shortcut.tab.previous")
+            previousTabShortcut.updateMenu(in: NSApp.mainMenu, title: TabDirection.previous.title)
+        }
+    }
+    @Published var recordingTabShortcut: TabDirection?
+    @Published var tabShortcutError: String?
     @Published var showsReading: Bool {
         didSet { store.set(showsReading, forKey: "tabs.reading") }
     }
@@ -208,6 +222,10 @@ final class Preferences: ObservableObject {
         engine = store.string(forKey: "search.engine").flatMap(Engine.init) ?? .standard
         customEngine = store.string(forKey: "search.custom") ?? ""
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
+        let next = TabShortcut.load(store.data(forKey: "shortcut.tab.next"), fallback: TabDirection.next.standard)
+        let previous = TabShortcut.load(store.data(forKey: "shortcut.tab.previous"), fallback: TabDirection.previous.standard)
+        nextTabShortcut = next.overlaps(previous) ? TabDirection.next.standard : next
+        previousTabShortcut = next.overlaps(previous) ? TabDirection.previous.standard : previous
         showsReading = store.object(forKey: "tabs.reading") as? Bool ?? true
         shielded = store.object(forKey: "shield") as? Bool ?? true
         extensionsInPrivate = store.bool(forKey: "extensions.private")
@@ -268,6 +286,59 @@ final class Preferences: ObservableObject {
         for key in ["mind.model", "mind.effort", "mind.acting", "mind.width", "mind.open"] {
             store.removeObject(forKey: key)
         }
+    }
+
+    func tabShortcut(for direction: TabDirection) -> TabShortcut {
+        direction == .next ? nextTabShortcut : previousTabShortcut
+    }
+
+    func cancelTabShortcutRecording() {
+        recordingTabShortcut = nil
+        tabShortcutError = nil
+    }
+
+    func resetTabShortcuts() {
+        cancelTabShortcutRecording()
+        nextTabShortcut = TabDirection.next.standard
+        previousTabShortcut = TabDirection.previous.standard
+    }
+
+    /// Runs before app commands so recording Command-Q cannot quit the browser.
+    func recordTabShortcut(_ event: NSEvent) {
+        guard let direction = recordingTabShortcut, !event.isARepeat else { return }
+        if event.keyCode == 53 { cancelTabShortcutRecording(); return }
+        guard let shortcut = TabShortcut(event) else {
+            tabShortcutError = "Include Command, Control, or Option with a key."
+            return
+        }
+        let other: TabDirection = direction == .next ? .previous : .next
+        if shortcut.overlaps(tabShortcut(for: other)) {
+            tabShortcutError = "Already used by \(other.title). Choose another shortcut."
+            return
+        }
+        // These aliases live in the event monitor rather than the main menu.
+        var conflict: String?
+        if shortcut.flags == .command {
+            if ContentView.digits[shortcut.code] != nil { conflict = "Tab selection or zoom" }
+            if shortcut.code == 123 { conflict = "Back" }
+            if shortcut.code == 124 { conflict = "Forward" }
+        }
+        if shortcut.flags.contains(.command), shortcut.flags.intersection([.option, .control]).isEmpty,
+           ["=", "+", "-", "0"].contains(shortcut.key) { conflict = "Zoom" }
+        if shortcut.flags == .control, let number = ContentView.digits[shortcut.code], number > 0 {
+            conflict = "Space selection"
+        }
+        conflict = conflict ?? shortcut.menuConflict(in: NSApp.mainMenu)
+        if #available(macOS 15.4, *),
+           Extensions.shared.contexts.values.contains(where: { $0.command(for: event) != nil }) {
+            conflict = "an extension"
+        }
+        if let conflict {
+            tabShortcutError = "Already used by \(conflict). Choose another shortcut."
+            return
+        }
+        if direction == .next { nextTabShortcut = shortcut } else { previousTabShortcut = shortcut }
+        cancelTabShortcutRecording()
     }
 
     /// WebKit's text checker takes its orders from the app's standard
