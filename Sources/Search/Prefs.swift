@@ -188,6 +188,16 @@ final class Preferences: ObservableObject {
     @Published var floatsOnLeave: Bool {
         didSet { store.set(floatsOnLeave, forKey: "float.leave") }
     }
+    /// A newer build is fetched, checked and put in place on its own, as it
+    /// always was. Off, Search still looks once a day and says so, and waits
+    /// for Install in Settings (see Updater.installsOnItsOwn).
+    @Published var installsUpdates: Bool {
+        didSet {
+            store.set(installsUpdates, forKey: Updater.installKey)
+            // Switched back on with one waiting: it goes in now.
+            if installsUpdates { Updater.shared.install() }
+        }
+    }
     /// Separate sets of tabs, each with its own sign-ins (see Spaces.swift).
     /// Off unless asked for.
     @Published var usesSpaces: Bool {
@@ -262,6 +272,7 @@ final class Preferences: ObservableObject {
         floatsOnLeave = store.object(forKey: "float.leave") as? Bool ?? true
         miniLinks = store.object(forKey: "links.mini") as? Bool ?? true
         peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
+        installsUpdates = store.object(forKey: Updater.installKey) as? Bool ?? true
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
         let links = store.bool(forKey: "links.show")
         showsLinks = links
