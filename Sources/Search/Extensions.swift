@@ -68,6 +68,10 @@ final class Extensions: NSObject, ObservableObject {
     weak var browser: Browser?
     private var adapters: [Tab.ID: ExtensionTab] = [:]
     private var order: [Tab.ID] = []
+    private var membership: [Tab.ID: ExtensionWindow] = [:]
+    private var miniWindowAdapters: [Tab.ID: ExtensionWindow] = [:]
+    private var selected: [ObjectIdentifier: Tab.ID] = [:]
+    private var lastFocusedWindow: ExtensionWindow?
     private var watching: [Tab.ID: [AnyCancellable]] = [:]
     private var bag = Set<AnyCancellable>()
     private(set) lazy var window = ExtensionWindow(owner: self)
@@ -131,14 +135,23 @@ final class Extensions: NSObject, ObservableObject {
         controller.didOpenWindow(window)
         browser.$tabs
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] tabs in self?.follow(tabs) }
+            .sink { [weak self] _ in self?.previewSurfacesChanged() }
             .store(in: &bag)
         browser.$activeID
             .removeDuplicates()
-            .scan((nil, nil)) { ($0.1, $1) }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] pair in self?.activated(from: pair.0, to: pair.1) }
+            .sink { [weak self] _ in self?.refreshSelection() }
             .store(in: &bag)
+        browser.$peekTab
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.previewSurfacesChanged() }
+            .store(in: &bag)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.publisher(for: name)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.refreshSelection() }
+                .store(in: &bag)
+        }
         // Once the window is up: loading one takes the main thread for tens
         // of milliseconds (uBlock Origin Lite, 45), and the first frame
         // waited behind it.
@@ -172,19 +185,60 @@ final class Extensions: NSObject, ObservableObject {
     /// carry the controller; one made before the switch has no page an
     /// extension could reach.
     private func seen(_ tab: Tab) -> Bool { !tab.shy || tab.carriesExtensions }
-    var visibleTabs: [Tab] { browser?.tabs.filter(seen) ?? [] }
+    var visibleTabs: [Tab] {
+        guard let browser else { return [] }
+        return (browser.tabs + browser.previewTabs).filter(seen)
+    }
 
     var activeAdapter: ExtensionTab? {
-        guard let tab = browser?.active, seen(tab) else { return nil }
+        guard let tab = browser?.focusedTab, seen(tab) else { return nil }
         return adapter(for: tab)
     }
 
-    private func follow(_ tabs: [Tab]) {
-        let now = tabs.filter(seen)
+    var openWindows: [ExtensionWindow] {
+        [window] + visibleTabs.compactMap { $0.surface == .mini ? miniWindowAdapters[$0.id] : nil }
+    }
+
+    var focusedWindow: ExtensionWindow? {
+        guard let key = NSApp.keyWindow else { return nil }
+        return openWindows.first { $0.nsWindow === key }
+    }
+
+    func window(for tab: Tab) -> ExtensionWindow? {
+        guard seen(tab) else { return nil }
+        return tab.surface == .mini ? miniWindowAdapters[tab.id] : window
+    }
+
+    func tabs(in window: ExtensionWindow) -> [Tab] {
+        visibleTabs.filter { tab in
+            if let miniID = window.miniID { return tab.surface == .mini && tab.id == miniID }
+            return tab.surface != .mini
+        }
+    }
+
+    func activeTab(in window: ExtensionWindow) -> Tab? {
+        if let miniID = window.miniID { return tabs(in: window).first { $0.id == miniID } }
+        guard let tab = browser?.peekTab ?? browser?.active, seen(tab) else { return nil }
+        return tab
+    }
+
+    /// Called after a preview mutation is complete. The subscriptions also
+    /// reconcile on the next run-loop turn, reading current state rather than
+    /// an earlier @Published value captured halfway through a promotion.
+    func previewSurfacesChanged() {
+        let now = visibleTabs
         let ids = now.map(\.id)
+        let miniIDs = Set(now.filter { $0.surface == .mini }.map(\.id))
+        for tab in now where tab.surface == .mini && miniWindowAdapters[tab.id] == nil {
+            let made = ExtensionWindow(owner: self, miniID: tab.id)
+            miniWindowAdapters[tab.id] = made
+            controller.didOpenWindow(made)
+        }
         let gone = order.filter { !ids.contains($0) }
         for id in gone {
-            if let adapter = adapters[id] { controller.didCloseTab(adapter, windowIsClosing: false) }
+            if let adapter = adapters[id] {
+                controller.didCloseTab(adapter, windowIsClosing: membership[id]?.miniID != nil)
+            }
             adapters[id] = nil
             watching[id] = nil
         }
@@ -192,13 +246,30 @@ final class Extensions: NSObject, ObservableObject {
             controller.didOpenTab(adapter(for: tab))
             watch(tab)
         }
-        // Moves: anything whose position changed among the ones that stayed.
-        let stayed = order.filter { ids.contains($0) }
-        let newOrder = ids.filter { stayed.contains($0) }
-        for (index, id) in stayed.enumerated() where newOrder.firstIndex(of: id) != index {
-            if let adapter = adapters[id] { controller.didMoveTab(adapter, from: index, in: window) }
+        // A Mini promotion is a real cross-window move of the same adapter.
+        // Open/close events would discard an extension's per-tab state.
+        for tab in now where order.contains(tab.id) {
+            guard let before = membership[tab.id], let after = window(for: tab) else { continue }
+            let oldOrder = order.filter { membership[$0] === before }
+            let newOrder = tabs(in: after).map(\.id)
+            guard let oldIndex = oldOrder.firstIndex(of: tab.id) else { continue }
+            let stayedBefore = oldOrder.filter { newOrder.contains($0) }
+            let stayedAfter = newOrder.filter { oldOrder.contains($0) }
+            if before !== after || stayedBefore.firstIndex(of: tab.id) != stayedAfter.firstIndex(of: tab.id) {
+                controller.didMoveTab(adapter(for: tab), from: oldIndex, in: before)
+            }
         }
+        membership = Dictionary(uniqueKeysWithValues: now.compactMap { tab in
+            window(for: tab).map { (tab.id, $0) }
+        })
         order = ids
+        // Moves must be delivered before the emptied Mini window closes.
+        for id in Array(miniWindowAdapters.keys) where !miniIDs.contains(id) {
+            guard let closed = miniWindowAdapters.removeValue(forKey: id) else { continue }
+            selected[ObjectIdentifier(closed)] = nil
+            controller.didCloseWindow(closed)
+        }
+        refreshSelection()
     }
 
     private func watch(_ tab: Tab) {
@@ -215,11 +286,25 @@ final class Extensions: NSObject, ObservableObject {
         ]
     }
 
-    private func activated(from old: Tab.ID?, to new: Tab.ID?) {
-        guard let new, let tab = browser?.tabs.first(where: { $0.id == new }), seen(tab) else { return }
-        let previous = old.flatMap { id in browser?.tabs.first(where: { $0.id == id }) }.map(adapter(for:))
-        controller.didActivateTab(adapter(for: tab), previousActiveTab: previous)
-        actionsChanged += 1
+    private func refreshSelection() {
+        for window in openWindows {
+            let key = ObjectIdentifier(window)
+            let tab = activeTab(in: window)
+            guard selected[key] != tab?.id else { continue }
+            if let tab, !order.contains(tab.id) { continue }
+            let previous = selected[key].flatMap { adapters[$0] }
+            selected[key] = tab?.id
+            if let tab {
+                controller.didActivateTab(adapter(for: tab), previousActiveTab: previous)
+            }
+            actionsChanged += 1
+        }
+        let focused = focusedWindow
+        if lastFocusedWindow !== focused {
+            lastFocusedWindow = focused
+            controller.didFocusWindow(focused)
+            actionsChanged += 1
+        }
     }
 
     // MARK: - loading
@@ -769,7 +854,7 @@ final class Extensions: NSObject, ObservableObject {
     /// tab or for all of them, else its manifest's.
     private func popupURL(for context: WKWebExtensionContext) -> URL? {
         let set = ExtensionShims.popups[context.uniqueIdentifier] ?? [:]
-        let path = browser?.active.flatMap { set[$0.id.uuidString] } ?? set["*"]
+        let path = browser?.focusedTab.flatMap { set[$0.id.uuidString] } ?? set["*"]
         guard let path else { return Extensions.popupURL(for: context) }
         guard !path.isEmpty else { return nil }
         return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
@@ -796,22 +881,28 @@ final class Extensions: NSObject, ObservableObject {
 @available(macOS 15.4, *)
 extension Extensions: WKWebExtensionControllerDelegate {
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor extensionContext: WKWebExtensionContext) -> [any WKWebExtensionWindow] {
-        [window]
+        openWindows
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, focusedWindowFor extensionContext: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-        window
+        focusedWindow
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionTab)? {
         guard let browser else { return nil }
+        if let requestedWindow = configuration.window as? ExtensionWindow, requestedWindow.miniID != nil {
+            throw NSError(domain: "Search.Extensions", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Mini windows hold one page. Move the page to a tab before adding another tab to its window."
+            ])
+        }
         let url = configuration.url ?? URL(string: "about:blank")!
-        let tab = browser.open(url, foreground: configuration.shouldBeActive, atEnd: true)
+        let parent = (configuration.parentTab as? ExtensionTab)?.tab
+        let tab = browser.open(url, foreground: configuration.shouldBeActive, atEnd: true, from: parent)
         if configuration.shouldBePinned { browser.pin(tab) }
         return adapter(for: tab)
     }
 
-    /// One window, on purpose. A new window's pages become tabs in this one.
+    /// Extension-created windows continue to open their pages in the main window.
     func webExtensionController(_ controller: WKWebExtensionController, openNewWindowUsing configuration: WKWebExtension.WindowConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionWindow)? {
         guard let browser else { return nil }
         for (index, url) in configuration.tabURLs.enumerated() {
@@ -913,18 +1004,23 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
 
     private var browser: Browser? { owner.browser }
 
-    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { owner.window }
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
+        tab.flatMap { owner.window(for: $0) }
+    }
 
     func indexInWindow(for context: WKWebExtensionContext) -> Int {
-        guard let tab else { return NSNotFound }
-        return owner.visibleTabs.firstIndex { $0.id == tab.id } ?? NSNotFound
+        guard let tab, let window = owner.window(for: tab) else { return NSNotFound }
+        return owner.tabs(in: window).firstIndex { $0.id == tab.id } ?? NSNotFound
     }
 
     func webView(for context: WKWebExtensionContext) -> WKWebView? { tab?.built }
     func title(for context: WKWebExtensionContext) -> String? { tab?.title }
     func url(for context: WKWebExtensionContext) -> URL? { tab?.address }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !(tab?.loading ?? false) }
-    func isSelected(for context: WKWebExtensionContext) -> Bool { tab?.id == browser?.activeID }
+    func isSelected(for context: WKWebExtensionContext) -> Bool {
+        guard let tab, let window = owner.window(for: tab) else { return false }
+        return owner.activeTab(in: window)?.id == tab.id
+    }
     func isPinned(for context: WKWebExtensionContext) -> Bool { tab?.pin != nil }
     func isPlayingAudio(for context: WKWebExtensionContext) -> Bool { tab?.noisy ?? false }
     func zoomFactor(for context: WKWebExtensionContext) -> Double { Double(tab?.built?.pageZoom ?? 1) }
@@ -933,6 +1029,7 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
 
     func setPinned(_ pinned: Bool, for context: WKWebExtensionContext) async throws {
         guard let tab, let browser else { return }
+        if pinned, tab.surface != .tab { browser.promotePreview(tab) }
         if pinned, tab.pin == nil { browser.pin(tab) }
         if !pinned, tab.pin != nil { browser.unpin(tab) }
     }
@@ -980,19 +1077,31 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
 @MainActor
 final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     unowned let owner: Extensions
-    init(owner: Extensions) { self.owner = owner }
+    let miniID: Tab.ID?
 
-    private var nsWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frameAutosaveName == "search" }
-            ?? NSApp.mainWindow
+    init(owner: Extensions, miniID: Tab.ID? = nil) {
+        self.owner = owner
+        self.miniID = miniID
+    }
+
+    var nsWindow: NSWindow? {
+        if let miniID { return owner.browser?.miniWindows[miniID]?.window }
+        let name = Store.world.map { "search (\($0))" } ?? "search"
+        return NSApp.windows.first { $0.contentView != nil && $0.frameAutosaveName == name }
     }
 
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] {
-        owner.visibleTabs.map(owner.adapter(for:))
+        owner.tabs(in: self).map(owner.adapter(for:))
     }
 
-    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { owner.activeAdapter }
-    func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType { .normal }
+    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
+        owner.activeTab(in: self).map(owner.adapter(for:))
+    }
+    func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType { miniID == nil ? .normal : .popup }
+    // Search's private-extension opt-in is enforced per tab by seen(_:),
+    // using the controller attached when the page was created. Preserve that
+    // main-window boundary here: declaring Mini private would add WebKit's
+    // separate private-data permission gate and hide pages the user opted in.
     func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
 
     func windowState(for context: WKWebExtensionContext) -> WKWebExtension.WindowState {
@@ -1008,6 +1117,11 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     func focus(for context: WKWebExtensionContext) async throws {
         NSApp.activate(ignoringOtherApps: true)
         nsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func close(for context: WKWebExtensionContext) async throws {
+        guard let miniID, let tab = owner.browser?.previewTabs.first(where: { $0.id == miniID }) else { return }
+        owner.browser?.close(tab)
     }
 }
 

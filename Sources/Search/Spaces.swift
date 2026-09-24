@@ -165,10 +165,11 @@ extension Browser {
         enter(id)
     }
 
-    private func enter(_ id: UUID) {
+    func enter(_ id: UUID) {
         guard id != spaceID, let to = spaces.firstIndex(where: { $0.id == id }) else { return }
         // Which way the icon at the foot turns over: the way the spaces lie.
         if !makingSpace { spaceStep = to > (spaces.firstIndex { $0.id == spaceID } ?? 0) ? 1 : -1 }
+        closePeek()
         cancelTabEdit()
         if floater.showing { land() }
         writeSession(now: true)
@@ -264,6 +265,10 @@ extension Browser {
     /// A space, its tabs, and its cookies and sign-ins, gone. The first one
     /// stays: it is where everything was before there were spaces.
     func deleteSpace(_ id: UUID) {
+        guard !previewTabs.contains(where: { $0.previewSpaceID == id }) else {
+            announce("Move or close this space's previews first")
+            return
+        }
         guard id != Space.firstID, let at = spaces.firstIndex(where: { $0.id == id }) else { return }
         if spaceID == id { switchSpace(to: Space.firstID) }
         for tab in parked.removeValue(forKey: id)?.tabs ?? [] { tab.close() }
@@ -279,6 +284,12 @@ extension Browser {
     /// Spaces turned off: back to the first one. The others are kept, in
     /// case they are turned on again.
     func leaveSpaces() {
+        guard !previewsInOtherSpaces else {
+            announce("Move or close previews in other spaces first")
+            // Published emits before the setting is assigned; restore after it.
+            DispatchQueue.main.async { [weak self] in self?.prefs.usesSpaces = true }
+            return
+        }
         enter(Space.firstID)
         for (_, row) in parked { for tab in row.tabs { tab.close() } }
         parked = [:]

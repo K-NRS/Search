@@ -29,6 +29,14 @@ enum ExtensionShims {
     /// Search's passkey patch, put first in every script an extension runs in
     /// a page's own world (see Passkeys.swift, and `first` in the script).
     nonisolated static let passkeys = "search-passkeys.js"
+    /// The compatibility bridge has no public WebKit-ID lookup. Accept only
+    /// an explicitly main-window reference, never an unqualified local index.
+    private static func mainTab(_ reference: Any, owner: Extensions) -> Tab? {
+        guard let reference = reference as? [String: Any], reference["window"] as? String == "main",
+              let index = reference["index"] as? Int else { return nil }
+        let tabs = owner.tabs(in: owner.window)
+        return tabs.indices.contains(index) ? tabs[index] : nil
+    }
     /// The first line of a worker that already carries the shim.
     nonisolated static let marker = "/* Search: Chrome APIs WebKit lacks, filled in (ExtensionShims.swift) */"
     nonisolated static let ender = "/* Search: end of shim */"
@@ -1161,22 +1169,34 @@ enum ExtensionShims {
         group: refuse("tabs.group"), ungroup: resolve(undefined),
         getSelected: (windowId, callback) => {
           const f = typeof windowId === "function" ? windowId : callback;
-          chrome.tabs.query({ active: true, currentWindow: true }).then((t) => f && f(t[0]));
+          const window = typeof windowId === "number" ? { windowId } : { currentWindow: true };
+          chrome.tabs.query({ active: true, ...window }).then((t) => f && f(t[0]));
         },
         getAllInWindow: (windowId, callback) => {
           const f = typeof windowId === "function" ? windowId : callback;
-          chrome.tabs.query({ currentWindow: true }).then((t) => f && f(t));
+          const window = typeof windowId === "number" ? { windowId } : { currentWindow: true };
+          chrome.tabs.query(window).then((t) => f && f(t));
         },
       });
+      // WebKit's tab indexes are local to a window. Only the main window
+      // has a row the native compatibility APIs can address; Mini's index 0
+      // must never be mistaken for the first main tab. Keep the original
+      // getter here so metadata repair cannot recurse through itself.
+      const nativeWindowGet = chrome.windows && chrome.windows.get && chrome.windows.get.bind(chrome.windows);
+      const mainTabReference = async (tab) => {
+        if (!nativeWindowGet || !tab || !(tab.index >= 0)) throw new Error("No tab there");
+        const win = await nativeWindowGet(tab.windowId);
+        if (win.type !== "normal") throw new Error("This operation isn't available in Mini windows");
+        return { window: "main", index: tab.index };
+      };
       if (chrome.tabs) {
-        // Moving, sleeping and bringing forward tabs, by where they are in
-        // the row — the one thing both sides agree on.
+        // Moving and sleeping tabs in the main window's row.
         const settle = () => new Promise((r) => setTimeout(r, 60));
         const byIndex = (api) => async (ids, extra) => {
           const out = [];
           for (const id of Array.isArray(ids) ? ids : [ids]) {
             const tab = await chrome.tabs.get(id);
-            await native(api, [tab.index, extra]);
+            await native(api, [await mainTabReference(tab), extra]);
             await settle();
             out.push(await chrome.tabs.get(id).catch(() => tab));
           }
@@ -1190,6 +1210,10 @@ enum ExtensionShims {
         };
         fill("tabs", {
           move: withCallback(async (ids, props = {}) => {
+            if (typeof props.windowId === "number" && nativeWindowGet) {
+              const destination = await nativeWindowGet(props.windowId);
+              if (destination.type !== "normal") throw new Error("Moving tabs into Mini windows isn't available");
+            }
             const list = Array.isArray(ids) ? ids : [ids];
             const out = [];
             let at = props.index ?? -1;
@@ -1204,9 +1228,12 @@ enum ExtensionShims {
             : byIndex("tabs.discard")(id)),
           highlight: withCallback(async (info = {}) => {
             const first = Array.isArray(info.tabs) ? info.tabs[0] : info.tabs;
-            await native("tabs.activate", [first]);
-            await settle();
-            return chrome.windows ? chrome.windows.getCurrent({ populate: true }) : undefined;
+            const query = typeof info.windowId === "number" ? { windowId: info.windowId } : { currentWindow: true };
+            const tabs = await chrome.tabs.query(query);
+            const tab = tabs.find((t) => t.index === first);
+            if (!tab) throw new Error("No tab there");
+            await chrome.tabs.update(tab.id, { active: true });
+            return chrome.windows ? chrome.windows.get(tab.windowId, { populate: true }) : undefined;
           }),
         });
       }
@@ -1243,9 +1270,10 @@ enum ExtensionShims {
         if (!a || typeof a.setPopup !== "function") continue;
         const setPopup = a.setPopup.bind(a);
         put(a, "setPopup", (details = {}, callback) => {
-          const tell = (index) => native("action.popup", [details.popup || "", index]).catch(() => {});
-          if (typeof details.tabId === "number" && chrome.tabs) chrome.tabs.get(details.tabId).then((t) => tell(t.index), () => {});
-          else tell(-1);
+          const tell = (reference) => native("action.popup", [details.popup || "", reference]).catch(() => {});
+          if (typeof details.tabId === "number" && chrome.tabs) {
+            chrome.tabs.get(details.tabId).then(mainTabReference).then(tell, () => {});
+          } else tell(null);
           return setPopup(details, callback);
         });
       }
@@ -1406,7 +1434,11 @@ enum ExtensionShims {
           for (const t of tabs) if (t.groupId === undefined) try { t.groupId = -1; } catch (e) {}
           const blind = seesTabs ? tabs.filter((t) => !t.url && t.index >= 0) : [];
           if (!blind.length) return null;
-          return native("tabs.describe", [blind.map((t) => t.index)]).then((info) => {
+          // WebKit withholds Mini URLs without host access. There is no
+          // public native lookup for its numeric IDs, so leave those fields
+          // withheld rather than substitute an unrelated main-window tab.
+          return Promise.all(blind.map((t) => mainTabReference(t).catch(() => null)))
+            .then((references) => native("tabs.describe", [references])).then((info) => {
             blind.forEach((t, i) => {
               const d = info && info[i];
               if (!d) return;
@@ -1415,7 +1447,7 @@ enum ExtensionShims {
           }, () => {});
         };
         const tabsIn = (value) => Array.isArray(value) ? value.flatMap(tabsIn)
-          : isTab(value) ? [value] : value && Array.isArray(value.tabs) ? value.tabs : [];
+          : value && Array.isArray(value.tabs) ? value.tabs : isTab(value) ? [value] : [];
         const mendResult = (target, name) => {
           if (!target || typeof target[name] !== "function") return;
           const original = target[name].bind(target);
@@ -2640,9 +2672,10 @@ enum ExtensionShims {
         // MARK: the button's popup
         case "action.popup":
             let path = first as? String ?? ""
-            let index = args.dropFirst().first as? Int ?? -1
-            if index >= 0, owner.visibleTabs.indices.contains(index) {
-                popups[id, default: [:]][owner.visibleTabs[index].id.uuidString] = path
+            let reference = args.dropFirst().first
+            if let reference, !(reference is NSNull) {
+                guard let tab = mainTab(reference, owner: owner) else { throw Unsupported(what: "No tab there") }
+                popups[id, default: [:]][tab.id.uuidString] = path
             } else {
                 popups[id, default: [:]]["*"] = path
                 popups[id] = popups[id]?.filter { $0.key == "*" }
@@ -2700,24 +2733,23 @@ enum ExtensionShims {
             Store.settings.set(had.filter { !gone.contains($0) }, forKey: "extensions.granted.\(id)")
             return true
 
-        // MARK: tabs, by where they are in the row
+        // MARK: tabs, by where they are in the main window's row
         case "tabs.describe":
-            let visible = owner.visibleTabs
-            return ((first as? [Int]) ?? []).map { index -> Any in
-                guard visible.indices.contains(index) else { return NSNull() }
-                return ["url": visible[index].address?.absoluteString ?? "", "title": visible[index].title]
+            return ((first as? [Any]) ?? []).map { reference -> Any in
+                guard let tab = mainTab(reference, owner: owner) else { return NSNull() }
+                return ["url": tab.address?.absoluteString ?? "", "title": tab.title]
             }
         case "tabs.move", "tabs.discard", "tabs.activate":
-            let visible = owner.visibleTabs
-            guard let from = first as? Int, visible.indices.contains(from) else { throw Unsupported(what: "No tab there") }
-            let tab = visible[from]
+            let visible = owner.tabs(in: owner.window)
+            guard let first, let tab = mainTab(first, owner: owner) else { throw Unsupported(what: "No tab there") }
             switch api {
             case "tabs.move":
+                guard tab.surface == .tab else { throw Unsupported(what: "Move the preview to a tab first") }
                 let wanted = args.dropFirst().first as? Int ?? -1
                 let target = visible[wanted < 0 || wanted >= visible.count ? visible.count - 1 : wanted]
                 if let index = browser.tabs.firstIndex(where: { $0.id == target.id }) { browser.move(tab, to: index) }
             case "tabs.discard":
-                if tab.id != browser.activeID { browser.sleep(tab) }
+                if tab.surface == .tab, tab.id != browser.activeID { browser.sleep(tab) }
             default:
                 browser.select(tab)
             }

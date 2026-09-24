@@ -21,6 +21,8 @@ It was built by a design studio that spends its whole day in a browser and was t
 ## What it does
 
 - **One field.** Type an address and you go there; type words and you search. It finishes addresses from your own history and never sends what you type anywhere until you press Return.
+- **Mini windows for quick visits.** External links open in a compact window; `⌥⌘N` opens one for a search or address while Search is running. **Move to Tab** (`⌘O`) keeps the live page, forms and navigation history in its original space.
+- **Peek at a link.** Shift-click a link to preview it over the current page. Links to another host from pinned tabs open in Peek automatically. Escape, `⌘W`, or a click outside closes it; `⌘O` keeps it as a tab. Settings › General has separate switches for automatic Mini windows and pinned-tab Peek, both on by default. Manual shortcuts remain available with either switch off. Temporary pages do not restore after quitting unless moved to tabs.
 - **Tabs that stay out of the way.** Pin the pages you keep open all day and they shrink to a letter or their icon. Tabs from your last session come back instantly and cost nothing until you click them. `⌘K` lists your open tabs by name.
 - **Reading mode.** `⇧⌘R` strips a page down to the article.
 - **Hide anything, for good.** `⇧⌘H`, then click a cookie banner, a newsletter overlay, a rail of "related" nonsense — it goes, and it is still gone on that site next time, before the page has drawn a single frame.
@@ -39,7 +41,7 @@ On purpose:
 - No extension you have to install to feel at home. Blocking ads, hiding clutter, reading mode, picture-in-picture and passwords are built in; extensions are there for everything else.
 - No sync, no account, no cloud. Your tabs, history and passwords are on your Mac and nowhere else.
 - No telemetry, no analytics, no crash reports sent anywhere. The only things that leave your Mac are the pages you ask for, their icons, and one small request a day to see whether there is a newer version.
-- One window. Tabs are the only kind of "new" there is.
+- One main window, with tabs for lasting work and Mini windows for quick visits.
 
 ## Privacy, concretely
 

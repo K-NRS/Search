@@ -143,10 +143,11 @@ final class Preferences: ObservableObject {
             FrameRate.fast = fastPages
         }
     }
-    /// Where a link goes, at the bottom of the page while the pointer is on
-    /// it (see StatusLine.swift). Off unless asked for.
-    /// Shift-click on a link opens it in a panel over the page (see
-    /// Peek.swift). Off unless asked for.
+    /// External links use Mini and pinned links to another host use Peek by
+    /// default. Manual Mini and Shift-click remain available either way.
+    @Published var miniLinks: Bool {
+        didSet { store.set(miniLinks, forKey: "links.mini") }
+    }
     @Published var peeksLinks: Bool {
         didSet { store.set(peeksLinks, forKey: "links.peek") }
     }
@@ -246,7 +247,8 @@ final class Preferences: ObservableObject {
         Float.flicks = flicks
         floatsAway = store.bool(forKey: "float.away")
         floatsOnLeave = store.object(forKey: "float.leave") as? Bool ?? true
-        peeksLinks = store.bool(forKey: "links.peek")
+        miniLinks = store.object(forKey: "links.mini") as? Bool ?? true
+        peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
         let links = store.bool(forKey: "links.show")
         showsLinks = links

@@ -18,10 +18,17 @@ struct SearchApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
         .commands {
-            // One window. Tabs are the only kind of "new" there is.
+            // Main tabs and temporary pages share page commands.
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { browser.newTab() }
                     .keyboardShortcut("t")
+                Button("New Mini Window") { browser.openMini() }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                Button("Move to Tab") {
+                    if let tab = browser.focusedTab { browser.promotePreview(tab) }
+                }
+                    .keyboardShortcut("o")
+                    .disabled(browser.focusedTab?.surface == .tab || browser.focusedTab == nil)
                 Button("New Private Tab") { browser.newShyTab() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Reopen Closed Tab") { browser.reopen() }
@@ -31,27 +38,27 @@ struct SearchApp: App {
                 Button("Open Address…") { browser.edit() }
                     .keyboardShortcut("l")
                 Divider()
-                Button("Close Tab") { if let tab = browser.active { browser.close(tab) } }
+                Button("Close Page") { browser.closeFocusedPage() }
                     .keyboardShortcut("w")
             }
             CommandGroup(replacing: .printItem) {
                 Button("Share…") { browser.share() }
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
                 Button("Print…") { browser.printPage() }
                     .keyboardShortcut("p")
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
             }
             CommandGroup(after: .pasteboard) {
                 Divider()
                 Button("Find on Page…") { browser.openFind() }
                     .keyboardShortcut("f")
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
                 Button("Find Next") { browser.look(forward: true) }
                     .keyboardShortcut("g")
-                    .disabled(!browser.finding)
+                    .disabled(!(browser.focusedTab?.surface != .tab ? browser.focusedTab?.previewFinding ?? false : browser.finding))
                 Button("Find Previous") { browser.look(forward: false) }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
-                    .disabled(!browser.finding)
+                    .disabled(!(browser.focusedTab?.surface != .tab ? browser.focusedTab?.previewFinding ?? false : browser.finding))
             }
             CommandGroup(replacing: .toolbar) {
                 Toggle("Show Tabs in Sidebar", isOn: Binding(
@@ -79,11 +86,14 @@ struct SearchApp: App {
                 Button("Reading Mode") { browser.toggleReader() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                 Button("Float Video") { browser.toggleFloat() }
+                    .disabled(browser.focusedTab?.surface != .tab)
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Divider()
                 Button("Hide Elements…") { browser.toggleHiding() }
+                    .disabled(browser.focusedTab?.surface != .tab)
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("Hidden on This Site…") { browser.reviewing.toggle() }
+                    .disabled(browser.focusedTab?.surface != .tab)
                     .keyboardShortcut("u", modifiers: [.command, .shift])
                 Divider()
                 Button("Zoom In") { browser.zoom(by: 1.1) }
@@ -104,10 +114,10 @@ struct SearchApp: App {
             CommandMenu("Tabs") {
                 Button("Back") { browser.back() }
                     .keyboardShortcut("[")
-                    .disabled(browser.active?.canGoBack != true)
+                    .disabled(browser.focusedTab?.canGoBack != true)
                 Button("Forward") { browser.forward() }
                     .keyboardShortcut("]")
-                    .disabled(browser.active?.canGoForward != true)
+                    .disabled(browser.focusedTab?.canGoForward != true)
                 Divider()
                 Button("Next Tab") { browser.step(1) }
                     .keyboardShortcut("]", modifiers: [.command, .shift])
@@ -116,7 +126,7 @@ struct SearchApp: App {
                 Button("Search Tabs…") { browser.summon() }
                     .keyboardShortcut("k")
                 Divider()
-                if let tab = browser.active {
+                if let tab = browser.focusedTab, tab.surface == .tab {
                     if tab.pin == nil {
                         Button("Pin Tab") { browser.pin(tab) }
                             .disabled(tab.isBlank)
@@ -126,28 +136,28 @@ struct SearchApp: App {
                     }
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }
-                    .disabled(browser.active == nil)
+                    .disabled(browser.focusedTab?.surface != .tab)
                 Button("Duplicate Tab") { browser.duplicate() }
                     .keyboardShortcut("d")
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
                 Button("Copy Address") { browser.copyAddress() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
                 Button("Copy as Markdown Link") { browser.copyMarkdownLink() }
-                    .disabled(browser.active?.isBlank ?? true)
+                    .disabled(browser.focusedTab?.isBlank ?? true)
                 Button("Paste and Go") { browser.pasteAndGo() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
-                    .disabled(browser.tabs.count < 2)
+                    .disabled(browser.tabs.count < 2 || browser.focusedTab?.surface != .tab)
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
             }
             CommandMenu("Bookmarks") {
                 Button("Add This Page") { browser.bookmarkCurrent() }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
-                    .disabled(browser.active?.isBlank ?? true)
-                Button("Show Bookmarks…") { browser.bookmarking = true }
+                    .disabled(browser.focusedTab?.isBlank ?? true)
+                Button("Show Bookmarks…") { browser.showMainWindow(); browser.closePeek(); browser.bookmarking = true }
                 Toggle("Show Bookmarks Bar", isOn: Binding(
                     get: { browser.prefs.bookmarksBar },
                     set: { on in withAnimation(Motion.glide) { browser.prefs.bookmarksBar = on } }
@@ -177,18 +187,18 @@ struct SearchApp: App {
                     }
                 }
                 Divider()
-                Button("Show History…") { browser.recalling = true }
+                Button("Show History…") { browser.showMainWindow(); browser.closePeek(); browser.recalling = true }
                     .keyboardShortcut("y")
-                Button("Downloads…") { browser.hoarding = true }
+                Button("Downloads…") { browser.showMainWindow(); browser.closePeek(); browser.hoarding = true }
                     .keyboardShortcut("j", modifiers: [.command, .shift])
                 Divider()
                 Button("Clear History") { browser.clearHistory() }
             }
             CommandGroup(after: .appSettings) {
-                Button("Settings…") { browser.tuning = true }
+                Button("Settings…") { browser.showMainWindow(); browser.closePeek(); browser.tuning = true }
                     .keyboardShortcut(",")
-                Button("Welcome…") { browser.welcoming = true }
-                Button("Passwords…") { browser.managing = true }
+                Button("Welcome…") { browser.showMainWindow(); browser.closePeek(); browser.welcoming = true }
+                Button("Passwords…") { browser.showMainWindow(); browser.closePeek(); browser.managing = true }
                     .keyboardShortcut("l", modifiers: [.command, .option])
             }
             CommandGroup(replacing: .help) {
@@ -386,13 +396,9 @@ struct ContentView: View {
     private var bars: some View {
         VStack(spacing: 8) {
             announcement
-            if let ask = browser.asking {
-                captureAsking(ask)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            if let offer = browser.offering {
-                keepAsking(offer)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            if browser.askingTab == browser.activeID && browser.asking != nil
+                || browser.offeringTab == browser.activeID && browser.offering != nil {
+                PageNotices(browser: browser, tab: browser.active)
             }
             StoreOffer(browser: browser)
             if browser.veiling {
@@ -537,7 +543,8 @@ struct ContentView: View {
     private func handBack() {
         guard !browser.fieldShowing, browser.editingTab == nil else { return }
         DispatchQueue.main.async {
-            guard let web = browser.active?.web, let window = web.window else { return }
+            guard browser.peekTab == nil, NSApp.keyWindow === Links.window,
+                  let web = browser.active?.web, let window = web.window else { return }
             window.makeFirstResponder(web)
         }
     }
@@ -560,80 +567,6 @@ struct ContentView: View {
                 .animation(Motion.settle, value: browser.announcement)
         }
     }
-
-    /// A page asking to see or hear you. Named by the site, in its own words,
-    /// with the answer remembered so it is asked once and not every call.
-    private func captureAsking(_ ask: Browser.CaptureAsk) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: ask.wants == "microphone" ? "mic" : "video")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Palette.muted)
-            Text("\(ask.host) wants to use your \(ask.wants)")
-                .font(.system(size: 12.5))
-                .foregroundStyle(Palette.ink)
-            Button { browser.allowCapture() } label: {
-                Text("Allow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.ground)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 5)
-                    .background(Palette.ink, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            Button { browser.denyCapture() } label: {
-                Text("Don't allow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 10)
-        .padding(.vertical, 9)
-        .background(Palette.ground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
-    }
-
-    /// Offered once, answered once. The password is never shown back to you —
-    /// there is nothing to be learned from reading your own password.
-    private func keepAsking(_ offer: Browser.Offer) -> some View {
-        let login = offer.login
-        return HStack(spacing: 12) {
-            Text(offer.changed
-                 ? "Update the password for \(login.user) on \(login.host)?"
-                 : (login.user.isEmpty
-                    ? "Save this password for \(login.host)?"
-                    : "Save the password for \(login.user) on \(login.host)?"))
-                .font(.system(size: 12.5))
-                .foregroundStyle(Palette.ink)
-                .lineLimit(1)
-            Button(offer.changed ? "Update" : "Save") { browser.keepOffer() }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.ground)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background(Palette.ink, in: Capsule())
-            Button("Not now") { browser.dropOffer() }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.muted)
-            if !offer.changed {
-                Button("Never here") { browser.neverOffer() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-            }
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 9)
-        .background(Palette.ground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
-    }
-
 
     /// A dark pill, for the one mode this browser has. It stays up for as long
     /// as the mode does, which is how you know you are still in it.
@@ -798,6 +731,11 @@ struct ContentView: View {
     ]
 
     private func take(_ event: NSEvent) -> Bool {
+        if let tab = browser.focusedTab, tab.surface != .tab {
+            return browser.previewKey(event, tab: tab)
+        }
+        // Inspector and auxiliary windows retain their own responder chain.
+        if let window = event.window, window !== Links.window { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
 

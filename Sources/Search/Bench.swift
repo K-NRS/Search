@@ -233,6 +233,14 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "preview":
+            answer(PreviewProbe.run(request, browser: browser))
+
+        #if DEBUG
+        case "preview-native":
+            answer(PreviewNativeProbe.run(request))
+        #endif
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
@@ -344,12 +352,7 @@ final class Bench {
                     let local = NSPoint(x: point[0], y: view.isFlipped ? point[1] : view.bounds.height - point[1])
                     let spot = view.convert(local, to: nil)
                     // Held while clicking: "shift", "cmd", "opt".
-                    var held: NSEvent.ModifierFlags = []
-                    for name in request["mods"] as? [String] ?? [] {
-                        if name == "shift" { held.insert(.shift) }
-                        if name == "cmd" { held.insert(.command) }
-                        if name == "opt" { held.insert(.option) }
-                    }
+                    let held = PreviewProbe.modifiers(request)
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                         guard let event = NSEvent.mouseEvent(
                             with: type, location: spot, modifierFlags: held,
@@ -1320,7 +1323,8 @@ final class Bench {
     /// `window.open` carries no flask and would be out of reach otherwise.
     private func find(_ request: [String: Any], in browser: Browser) -> Tab? {
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else { return nil }
-        return browser.tabs.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
+        let candidates = Store.testing ? browser.tabs + browser.parkedTabs + browser.previewTabs : browser.tabs
+        return candidates.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
     }
 
     private func missing(_ request: [String: Any]) -> [String: Any] {

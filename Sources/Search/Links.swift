@@ -101,33 +101,23 @@ final class Links: NSObject, NSApplicationDelegate {
     /// The browser, once it has a window. Anything that came earlier is
     /// handed over now — but none of it before the window is on screen.
     ///
-    /// Five addresses at launch used to mean five web views built before the
-    /// first frame, and a window that took a second to appear instead of a
-    /// third of one. Now the window comes first; the first page goes into
-    /// the blank tab that is already there, and the others fill in behind
-    /// it, a few frames apart, in the order they came.
+    /// The main window draws before queued pages start loading. External
+    /// links then open in Mini by default, staggered in arrival order. With
+    /// Mini disabled, the first uses a blank tab and later links open behind it.
     @MainActor
     static func hand(to browser: Browser) {
-        deliver = { [weak browser] url in
-            browser?.arrive(url)
-            // The window closed with the app still running: the link brings
-            // it back, rather than landing in a tab nobody can see.
-            if let window {
-                if !window.isVisible { window.makeKeyAndOrderFront(nil) }
-            } else {
-                _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
-            }
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        deliver = { [weak browser] url in browser?.receiveExternal(url) }
         flush = { [weak browser] in browser?.flushSession() }
         let early = waiting
         waiting = []
         guard let first = early.first else { return }
         onceShown { [weak browser] in
-            browser?.arrive(first)
+            browser?.receiveExternal(first)
             for (n, url) in early.dropFirst().enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15 * Double(n + 1)) { [weak browser] in
-                    browser?.open(url, foreground: false, atEnd: true)
+                    guard let browser else { return }
+                    if browser.prefs.miniLinks { browser.receiveExternal(url) }
+                    else { browser.open(url, foreground: false, atEnd: true) }
                 }
             }
         }

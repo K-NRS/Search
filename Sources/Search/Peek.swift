@@ -1,40 +1,11 @@
 import SwiftUI
 
-// A peek at a link, Arc's way: shift-click it and its page opens in a panel
-// over the one you are reading, which stays where it was underneath. Escape,
-// a click beside the panel or its cross puts it away; its other button keeps
-// it, as a tab beside this one, loaded as it is.
-//
-// Off unless asked for, in Settings › General: shift-click means other
-// things to some pages, and nobody who doesn't want this should meet it.
-//
-// The page is a tab of its own, only not in the row: keeping it is moving
-// it there, with nothing loaded twice.
-
+// Shift-click previews any link. Pinned tabs also preview links to another
+// host by default; Settings can turn that automatic behavior off.
 extension Browser {
-    /// Shift-click on a link, from a tab in the row.
-    func peek(_ url: URL, from tab: Tab) {
-        let page = Tab(shy: tab.shy)
-        prepare(page)
-        page.go(to: url)
-        withAnimation(Motion.settle) { peekTab = page }
-    }
-
-    /// Put away: the page goes with the panel.
-    func closePeek() {
-        guard let page = peekTab else { return }
-        withAnimation(Motion.quick) { peekTab = nil }
-        page.close()
-    }
-
-    /// Kept: a tab beside the one it was opened from, and in front.
-    func keepPeek() {
-        guard let page = peekTab else { return }
-        let here = tabs.firstIndex { $0.id == activeID }
-        withAnimation(Motion.quick) { peekTab = nil }
-        insert(page, at: here.map { $0 + 1 } ?? tabs.count)
-        select(page)
-    }
+    func peek(_ url: URL, from tab: Tab) { openPeek(url, source: tab) }
+    func closePeek() { if let tab = peekTab { closePreview(tab) } }
+    func keepPeek() { if let tab = peekTab { promotePreview(tab) } }
 }
 
 /// The peek over the page: the page dimmed around it, and the panel.
@@ -68,7 +39,7 @@ struct PeekPanel: View {
         GeometryReader { geo in
             ZStack {
                 HStack(alignment: .top, spacing: 10) {
-                    Page(tab: tab)
+                    PreviewPage(browser: browser, tab: tab, surface: .peek)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -77,7 +48,7 @@ struct PeekPanel: View {
                         .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
                     VStack(spacing: 8) {
                         Knob("xmark", help: "Close (esc)") { browser.closePeek() }
-                        Knob("arrow.up.left.and.arrow.down.right", help: "Open as a tab") { browser.keepPeek() }
+                        Knob("arrow.up.left.and.arrow.down.right", help: "Move to Tab (⌘O)") { browser.keepPeek() }
                     }
                 }
                 .frame(width: geo.size.width * 0.82, height: geo.size.height * 0.86)
