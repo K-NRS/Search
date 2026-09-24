@@ -32,6 +32,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Floating video stays inside its window on players that center it with a transform, and Netflix subtitles remain visible above the picture.
 - A page gets the shortcuts it uses before Search does, as in Chrome: ⌘K in Slack, ⌘F in a Google Doc, ⌘S in an editor. Search acts only if the page leaves the key unused. The keys that open, close and switch tabs (⌘T, ⌘W, ⌘⇧T, ⌘⇧N, ⌘1–⌘9, ⌘⇧[ and ⌘⇧]) stay Search's, and the menus are unchanged. Thanks [@AbhiPanseriya](https://x.com/AbhiPanseriya) for the report. Refs [#147](https://github.com/driceroland/Search/issues/147)
 - The list under the address field keeps up with a paste or a keystroke: its rows change at once instead of sliding into place on a spring, it comes and goes with a short fade, and the field steps aside quickly once Return is pressed. Thanks [@andupoto](https://x.com/andupoto) for the report
 - Spaces across the top go one at a time: a spin of the mouse wheel, or a stroke that follows another too soon, no longer runs through several of them, and a little scrolling with the pointer high on the page no longer changes space. The space's icon turns over the way the tabs go, up for the next space and down going back, where it slid sideways.
