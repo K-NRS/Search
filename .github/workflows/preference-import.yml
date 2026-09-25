@@ -1,0 +1,22 @@
+name: Verify safe preference import
+on:
+  push:
+    branches: [knrs/integrated-2026-09-25]
+    paths:
+      - tools/import-official-preferences.sh
+      - validation/preference-import-test.py
+      - .github/workflows/preference-import.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell and run against disposable preference domains
+        run: |
+          set -euo pipefail
+          bash -n tools/import-official-preferences.sh
+          python3 validation/preference-import-test.py
