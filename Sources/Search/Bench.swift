@@ -277,6 +277,14 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "organize-ui":
+            guard Store.testing else { answer(["error": "organize-ui requires a test run"]); return }
+            answer(browser.groupingNative(request))
+
+        case "organize":
+            guard Store.testing else { answer(["error": "organize requires a test run"]); return }
+            answer(browser.groupingCommand(request))
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
@@ -1293,7 +1301,7 @@ final class Bench {
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
 
-        case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable":
+        case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable", "ext-shortcuts":
             guard #available(macOS 15.4, *) else {
                 answer(["error": "extensions need macOS 15.4"])
                 return
@@ -1314,6 +1322,41 @@ final class Bench {
         let extensions = Extensions.shared
         let skip = Store.testing && (request["yes"] as? Bool ?? false)
         switch verb {
+        case "ext-shortcuts":
+            guard Store.testing else { answer(["error": "shortcuts can only be driven in a test run"]); return }
+            guard let id = request["id"] as? String, let item = extensions.installed.first(where: { $0.id == id }) else {
+                answer(["error": "ext-shortcuts needs an installed extension id"]); return
+            }
+            if let commandID = request["command"] as? String, let action = request["action"] as? String {
+                let target = Extensions.ShortcutTarget(extensionID: id, commandID: commandID)
+                switch action {
+                case "record":
+                    Store.settings.set("extensions", forKey: "settings.page")
+                    browser.tuning = true
+                    extensions.beginShortcutRecording(target)
+                case "clear": extensions.setShortcut(.init(key: nil, flags: []), for: target)
+                case "reset": extensions.setShortcut(nil, for: target)
+                default: answer(["error": "unknown shortcut action"]); return
+                }
+            }
+            let commands = extensions.shortcutCommands(for: id).map { command -> [String: Any] in
+                let shortcut = ExtensionShortcut(key: command.activationKey, flags: command.modifierFlags)
+                return ["id": command.id, "title": command.title, "key": shortcut.key, "modifiers": shortcut.modifiers,
+                        "label": shortcut.label, "customized": extensions.installed.first(where: { $0.id == item.id })?.shortcuts?[command.id] != nil]
+            }
+            if let path = request["snapshot"] as? String, let view = Links.window?.contentView {
+                view.layoutSubtreeIfNeeded()
+                if let picture = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: picture)
+                    if let data = picture.representation(using: .png, properties: [:]) {
+                        do { try data.write(to: URL(fileURLWithPath: path)) }
+                        catch { answer(["error": error.localizedDescription]); return }
+                    }
+                }
+            }
+            answer(["commands": commands,
+                    "recording": extensions.recordingShortcut?.extensionID == id ? extensions.recordingShortcut?.commandID ?? "" : "",
+                    "error": extensions.shortcutErrors.first(where: { $0.key.hasPrefix(id + "/") })?.value ?? ""])
         case "extensions":
             answer(["busy": extensions.busy ?? "", "extensions": extensions.installed.map { item -> [String: Any] in
                 let context = extensions.contexts[item.id]

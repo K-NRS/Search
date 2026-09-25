@@ -97,7 +97,7 @@ struct SideBar: View {
         .animation(Motion.quick, value: landing)
         .animation(Motion.glide, value: browser.activeID)
         .animation(Motion.glide, value: browser.editingTab)
-        .animation(Motion.settle, value: browser.tabs.map(\.id))
+        .animation(Motion.settle, value: browser.presentedTabs.map(\.id))
         .animation(Motion.settle, value: browser.pinnedCount)
     }
 
@@ -199,15 +199,11 @@ struct SideBar: View {
                                 rows.padding(.trailing, 10)
                             }
                             .padding(.trailing, -10)
-                            // The tab you go to is the tab you see — ⌘1–⌘9,
-                            // ⇧⌘], a link opening beside the one on screen.
-                            .onChange(of: browser.activeID) { _, id in
-                                guard let id else { return }
-                                withAnimation(Motion.glide) { proxy.scrollTo(id) }
-                            }
-                            .onAppear {
-                                if let id = browser.activeID { proxy.scrollTo(id, anchor: .center) }
-                            }
+                            // Reveal the selected tab or its collapsed heading.
+                            .onChange(of: browser.activeID) { _, _ in reveal(proxy) }
+                            .onChange(of: browser.groups) { _, _ in reveal(proxy) }
+                            .onChange(of: browser.spaceID) { _, _ in reveal(proxy) }
+                            .onAppear { reveal(proxy) }
                         }
                     }
                 }
@@ -224,7 +220,7 @@ struct SideBar: View {
     /// it is the one on screen.
     private func preview(_ row: Parked, pill: Namespace.ID) -> some View {
         let pins = row.tabs.filter { $0.pin != nil }
-        let rest = row.tabs.filter { $0.pin == nil }
+        let entries = looseIDs(tabs: row.tabs, groups: row.groups)
         let cols = SideBar.pinColumns(pins.count)
         let width = pinWidth(for: pins.count)
         let height = min(SideBar.square, width)
@@ -241,13 +237,22 @@ struct SideBar: View {
                 .padding(.bottom, 10)
             }
             VStack(spacing: SideBar.gap) {
-                ForEach(rest) { tab in
-                    SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+                ForEach(entries, id: \.self) { id in
+                    if let group = row.groups.first(where: { $0.id == id }) {
+                        GroupHeading(browser: browser, group: group,
+                                     count: row.tabs.filter { $0.pin == nil && $0.groupID == group.id }.count,
+                                     selected: row.tabs.first { $0.id == row.active }?.groupID == group.id,
+                                     interactive: false)
+                    } else if let tab = row.tabs.first(where: { $0.id == id }) {
+                        SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+                            .padding(.leading, tab.groupID == nil ? 0 : 8)
+                    }
                 }
             }
             newTab
         }
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     /// Where the rows stop and the window's own drag area starts. Added up
@@ -259,14 +264,14 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        let loose = CGFloat(browser.tabs.count - pins) * (SideBar.row + SideBar.gap)
+        let loose = CGFloat(browser.presentedTabs.count - pins + browser.groups.count) * (SideBar.row + SideBar.gap)
         return Metrics.strip + pinBlock + loose + SideBar.row + 8
     }
 
     // MARK: - the pinned squares
 
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil } }
-    private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil } }
+    private var looseTabs: [Tab] { browser.presentedTabs.filter { $0.pin == nil } }
 
     /// Three columns is the block's own shape — up to six pins, that's two
     /// full rows, and one or two is just those same three places with a
@@ -379,8 +384,12 @@ struct SideBar: View {
                 let stepY = height + SideBar.pinGap
                 let target = pinTarget(from: pinFrom, moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY))
                 if target != index {
+                    let peers = pinnedTabs
+                    guard peers.indices.contains(target) else { return }
                     withAnimation(Motion.settle) {
-                        browser.move(tab, to: target)
+                        if let canonical = browser.tabs.firstIndex(where: { $0.id == peers[target].id }) {
+                            browser.move(tab, to: canonical)
+                        }
                     }
                 }
             }
@@ -394,28 +403,56 @@ struct SideBar: View {
 
     // MARK: - the rows
 
+    /// A flat sequence gives every visible header and row one scroll target.
+    /// The parked preview uses the same sequence without borrowing current groups.
+    private func looseIDs(tabs: [Tab], groups: [TabGroup]) -> [UUID] {
+        let known = Set(groups.map(\.id))
+        let ungrouped = tabs.filter { $0.pin == nil && ($0.groupID == nil || !known.contains($0.groupID!)) }
+        return ungrouped.map(\.id) + groups.flatMap { group in
+            [group.id] + (group.collapsed ? [] : tabs.filter { $0.pin == nil && $0.groupID == group.id }.map(\.id))
+        }
+    }
+
+    private func reveal(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard let tab = browser.active else { return }
+            let collapsed = browser.groups.first { $0.id == tab.groupID && $0.collapsed }
+            // An occluded window may not advance an animated scroll. Selection
+            // must be visible as soon as the column returns to the screen.
+            proxy.scrollTo(collapsed?.id ?? tab.id, anchor: .center)
+        }
+    }
+
     private var loose: some View {
         VStack(spacing: SideBar.gap) {
-            // See the grid: the drag is measured in the column's space, not
-            // the row's, so a row that has just moved keeps its bearings.
-            ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
-                let step = SideBar.row + SideBar.gap
-                SideRow(
-                    browser: browser,
-                    prefs: prefs,
-                    tab: tab,
-                    live: tab.id == browser.activeID,
-                    pill: pill,
-                    close: { browser.close(tab) }
-                )
-                // Positions here are among the loose rows; the pinned block
-                // sits in front of them in the real list.
-                .modifier(Carried(index: index, count: looseTabs.count, step: step, vertical: true, space: "rows") {
-                    browser.move(tab, to: $0 + browser.pinnedCount)
-                })
+            ForEach(looseIDs(tabs: browser.tabs, groups: browser.groups), id: \.self) { id in
+                Group {
+                    if let group = browser.groups.first(where: { $0.id == id }) {
+                        GroupHeading(browser: browser, group: group,
+                                     count: browser.tabs.filter { $0.pin == nil && $0.groupID == group.id }.count,
+                                     selected: browser.active?.groupID == group.id)
+                    } else if let tab = looseTabs.first(where: { $0.id == id }) {
+                        row(tab).padding(.leading, tab.groupID == nil ? 0 : 8)
+                    }
+                }
+                .id(id)
             }
         }
         .coordinateSpace(name: "rows")
+    }
+
+    private func row(_ tab: Tab) -> some View {
+        let peers = looseTabs.filter { $0.groupID == tab.groupID }
+        let index = peers.firstIndex { $0.id == tab.id } ?? 0
+        let step = SideBar.row + SideBar.gap
+        return SideRow(browser: browser, prefs: prefs, tab: tab,
+                       live: tab.id == browser.activeID, pill: pill,
+                       close: { browser.close(tab) })
+            .modifier(Carried(index: index, count: peers.count, step: step, vertical: true, space: "rows") { target in
+                guard peers.indices.contains(target),
+                      let canonical = browser.tabs.firstIndex(where: { $0.id == peers[target].id }) else { return }
+                browser.move(tab, to: canonical)
+            })
     }
 
     /// The loose tabs and the row that makes another, which scroll as one.

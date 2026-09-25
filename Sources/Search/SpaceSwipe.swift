@@ -60,6 +60,7 @@ final class SpaceSwipe {
 
     /// True for an event the swipe keeps for itself.
     private func takes(_ event: NSEvent) -> Bool {
+        guard NSApp.modalWindow == nil, Links.window?.attachedSheet == nil else { return false }
         guard let browser, browser.prefs.usesSpaces, !browser.folded || browser.peeking else { return false }
         // A mouse wheel over the bar: a spin, a space.
         if !event.hasPreciseScrollingDeltas {
@@ -199,6 +200,8 @@ struct NewSpaceCard: View {
     var inline = false
     @State private var name = ""
     @State private var icon = "briefcase"
+    @State private var emoji = ""
+    private var emojiMark: TabMark? { emoji.isEmpty ? nil : TabMark(kind: .emoji, value: emoji) }
     @State private var choosing = false
     /// Signed in where the other spaces are, or starting afresh.
     @State private var shared = true
@@ -222,6 +225,7 @@ struct NewSpaceCard: View {
                         .help(saying)
                     Pill("Cancel") { cancel() }
                     Pill("Create", filled: true) { create() }
+                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || emojiMark?.isValid == false)
                 }
                 .frame(height: Metrics.strip)
             } else {
@@ -250,6 +254,7 @@ struct NewSpaceCard: View {
                     HStack(spacing: 8) {
                         Pill("Cancel") { cancel() }
                         Pill("Create", filled: true) { create() }
+                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || emojiMark?.isValid == false)
                     }
                 }
                 .padding(16)
@@ -267,7 +272,10 @@ struct NewSpaceCard: View {
     /// laid out in the card.
     private func pick(size: CGFloat, box: CGSize) -> some View {
         Button { choosing = true } label: {
-            Image(systemName: icon)
+            Group {
+                if let mark = emojiMark, mark.isValid { Text(mark.value) }
+                else { Image(systemName: icon) }
+            }
                 .font(.system(size: size, weight: .medium))
                 .foregroundStyle(Palette.ink)
                 .frame(width: box.width, height: box.height)
@@ -281,7 +289,7 @@ struct NewSpaceCard: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(inline ? "New space — choose its icon" : "Choose an icon")
+        .help(inline ? "New space — choose its emoji or icon" : "Choose an emoji or icon")
         .popover(isPresented: $choosing, arrowEdge: .bottom) { icons }
     }
 
@@ -299,23 +307,32 @@ struct NewSpaceCard: View {
     /// Every icon, a few to a row, the chosen one on a grey of its own;
     /// picking one puts the list away.
     private var icons: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 4), count: 6), spacing: 4) {
-            ForEach(Array(zip(Spaces.icons, Spaces.iconNames)), id: \.0) { symbol, name in
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(symbol == icon ? Palette.ink : Palette.muted)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(symbol == icon ? Palette.wash : .clear)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(Motion.quick) { icon = symbol }
-                        choosing = false
-                        typing = true
-                    }
-                    .help(name)
+        VStack(spacing: 8) {
+            TextField("Emoji", text: $emoji)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Space emoji")
+                .onSubmit { if emojiMark?.isValid != false { choosing = false; typing = true } }
+            if emojiMark?.isValid == false {
+                Text("Choose one emoji").font(.system(size: 11)).foregroundStyle(Palette.muted)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 4), count: 6), spacing: 4) {
+                ForEach(Array(zip(Spaces.icons, Spaces.iconNames)), id: \.0) { symbol, name in
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(symbol == icon ? Palette.ink : Palette.muted)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(symbol == icon ? Palette.wash : .clear)
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(Motion.quick) { icon = symbol; emoji = "" }
+                            choosing = false
+                            typing = true
+                        }
+                        .help(name)
+                }
             }
         }
         .padding(10)
@@ -323,8 +340,8 @@ struct NewSpaceCard: View {
 
     private func create() {
         let named = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !named.isEmpty else { typing = true; return }
-        browser.addSpace(named: named, icon: icon, sharesSignIns: shared)
+        guard !named.isEmpty, emojiMark?.isValid != false else { typing = true; return }
+        browser.addSpace(named: named, icon: icon, sharesSignIns: shared, mark: emojiMark)
     }
 
     /// Back to the space it was made from, the way it came.

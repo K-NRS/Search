@@ -92,6 +92,10 @@ struct ExtensionsPage: View {
                     }
                 }
             }
+            .onDisappear { extensions.cancelShortcutRecording() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                extensions.cancelShortcutRecording()
+            }
         }
 
         private func add() {
@@ -109,6 +113,21 @@ struct ExtensionsPage: View {
 
         var body: some View {
             let context = extensions.contexts[item.id]
+            VStack(alignment: .leading, spacing: 0) {
+                header(context)
+                if item.enabled, let context, !context.commands.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(extensions.shortcutCommands(for: item.id), id: \.id) { command in
+                            ShortcutRow(item: item, command: command, extensions: extensions)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+                }
+            }
+        }
+
+        private func header(_ context: WKWebExtensionContext?) -> some View {
             HStack(spacing: 12) {
                 Group {
                     if let icon = context?.webExtension.icon(for: CGSize(width: 32, height: 32)) {
@@ -171,6 +190,71 @@ struct ExtensionsPage: View {
             }
             if let errors = context?.errors, !errors.isEmpty { parts.append("\(errors.count) warning\(errors.count == 1 ? "" : "s")") }
             return parts.joined(separator: " · ")
+        }
+    }
+
+    @available(macOS 15.4, *)
+    private struct ShortcutRow: View {
+        let item: Installed
+        let command: WKWebExtension.Command
+        @ObservedObject var extensions: Extensions
+
+        private var target: Extensions.ShortcutTarget {
+            .init(extensionID: item.id, commandID: command.id)
+        }
+
+        var body: some View {
+            let shortcut = ExtensionShortcut(key: command.activationKey, flags: command.modifierFlags)
+            let recording = extensions.recordingShortcut == target
+            let isAction = ["_execute_action", "_execute_browser_action", "_execute_page_action"].contains(command.id)
+            let title = isAction || command.title.isEmpty ? "Open extension" : command.title
+            let issue = extensions.shortcutErrors[target.key] ?? extensions.shortcutIssue(shortcut, for: target)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button {
+                        if recording { extensions.cancelShortcutRecording() }
+                        else { extensions.beginShortcutRecording(target) }
+                    } label: {
+                        Text(recording ? "Press shortcut…" : shortcut.label)
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundStyle(Palette.ink)
+                            .frame(minWidth: 100)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7))
+                            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(recording ? Palette.ink : Palette.hairline, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Shortcut for \(title)")
+                    .accessibilityValue(recording ? "Recording shortcut" : shortcut.label)
+                    .help("Press a shortcut with ⌘, ⌥ or ⌃. Escape cancels.")
+                    Button("Clear") { extensions.setShortcut(.init(key: nil, flags: []), for: target) }
+                        .disabled(shortcut.key.isEmpty)
+                        .accessibilityLabel("Clear shortcut for \(title)")
+                    Button("Reset") { extensions.setShortcut(nil, for: target) }
+                        .disabled(item.shortcuts?[command.id] == nil)
+                        .accessibilityLabel("Reset shortcut for \(title)")
+                    Spacer(minLength: 0)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                if let issue {
+                    Text(issue)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.updatesFrequently)
+                } else if recording {
+                    Text("Include ⌘, ⌥ or ⌃ · Esc to cancel")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                }
+            }
         }
     }
 }

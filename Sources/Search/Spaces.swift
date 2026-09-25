@@ -30,6 +30,7 @@ struct Space: Codable, Identifiable, Equatable {
     var sharesSignIns: Bool?
     /// Where this space's downloads go; nil for the folder in Settings.
     var downloads: String?
+    var mark: TabMark?
 
     /// The first space: the session and the store there were before spaces.
     static let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001") ?? UUID()
@@ -37,7 +38,7 @@ struct Space: Codable, Identifiable, Equatable {
 
     /// The icon it shows: its own, or a house for the first and a
     /// briefcase for any other that has none yet.
-    var symbol: String { icon.flatMap { Spaces.icons.contains($0) ? $0 : nil } ?? (isFirst ? "house" : "briefcase") }
+    var symbol: String { if let mark, mark.isValid, mark.kind == .symbol { return mark.value }; return icon.flatMap { Spaces.icons.contains($0) ? $0 : nil } ?? (isFirst ? "house" : "briefcase") }
 }
 
 enum Spaces {
@@ -145,6 +146,7 @@ enum Spaces {
 struct Parked {
     var tabs: [Tab]
     var active: Tab.ID?
+    var groups: [TabGroup] = []
 }
 
 extension Browser {
@@ -176,12 +178,13 @@ extension Browser {
         // The row on screen is parked as it is, sound and all: music or a
         // stream keeps playing in the space you left, as it does in a tab
         // you left. ⌘⇧M, or its speaker, stops it.
-        parked[spaceID] = Parked(tabs: tabs, active: activeID)
+        parked[spaceID] = Parked(tabs: tabs, active: activeID, groups: groups)
 
         spaceID = id
         Spaces.current = id
         Store.settings.set(id.uuidString, forKey: "space.current")
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
+            groups = back.groups
             showRow(back.tabs, active: back.active)
             if let active, !active.wake() { active.revive() }
         } else {
@@ -215,9 +218,10 @@ extension Browser {
 
     /// A new space, empty, and on screen — signed in where the others are,
     /// or starting afresh with its own cookies and sign-ins.
-    func addSpace(named name: String, icon: String? = nil, sharesSignIns: Bool = true) {
+    func addSpace(named name: String, icon: String? = nil, sharesSignIns: Bool = true, mark: TabMark? = nil) {
+        guard mark?.isValid != false, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         makingSpace = false
-        let made = Space(id: UUID(), name: name, colour: 0, icon: icon ?? freeIcon, sharesSignIns: sharesSignIns)
+        let made = Space(id: UUID(), name: name, colour: 0, icon: icon ?? freeIcon, sharesSignIns: sharesSignIns, mark: mark)
         spaces.append(made)
         Spaces.write(spaces)
         switchSpace(to: made.id)
@@ -239,7 +243,9 @@ extension Browser {
             SpaceSwipe.shared.start(for: self)
             SpaceSwipe.shared.slide(self, to: spaces.count, from: here)
         } else {
-            Ask.newSpace { name, shared in self.addSpace(named: name, sharesSignIns: shared) }
+            GroupEditor.ask(title: "New Space", name: "", mark: nil, separateOption: true) { name, mark, separate in
+                self.addSpace(named: name, sharesSignIns: !separate, mark: mark)
+            }
         }
     }
 
@@ -251,6 +257,7 @@ extension Browser {
 
     func setSpaceIcon(_ id: UUID, to icon: String) {
         guard let at = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[at].mark = nil
         spaces[at].icon = icon
         Spaces.write(spaces)
     }
@@ -279,6 +286,7 @@ extension Browser {
     /// Spaces turned off: back to the first one. The others are kept, in
     /// case they are turned on again.
     func leaveSpaces() {
+        flushSession()
         enter(Space.firstID)
         for (_, row) in parked { for tab in row.tabs { tab.close() } }
         parked = [:]
@@ -297,17 +305,24 @@ struct SpaceDot: View {
     /// What is drawn, a step behind the browser: the space changes in a
     /// frame with nothing animated (see SpaceSwipe.slide), and the icon
     /// turns over just after, on a change of its own.
-    @State private var shown: (key: String, symbol: String)?
+    @State private var shown: (key: String, symbol: String, emoji: String?)?
 
     static let width: CGFloat = 26
 
     private var symbol: String { browser.makingSpace ? "plus" : browser.space.symbol }
-    private var key: String { browser.makingSpace ? "new" : "\(browser.spaceID.uuidString)-\(browser.space.symbol)" }
+    private var emoji: String? {
+        guard !browser.makingSpace, let mark = browser.space.mark, mark.isValid, mark.kind == .emoji else { return nil }
+        return mark.value
+    }
+    private var key: String { browser.makingSpace ? "new" : "\(browser.spaceID.uuidString)-\(symbol)-\(emoji ?? "")" }
 
     var body: some View {
         Button { SpaceMenu.show(for: browser) } label: {
             ZStack {
-                Image(systemName: shown?.symbol ?? symbol)
+                Group {
+                    if let emoji = shown.map({ $0.emoji }) ?? emoji { Text(emoji) }
+                    else { Image(systemName: shown?.symbol ?? symbol) }
+                }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(hovering ? Palette.ink : Palette.muted)
                     .id(shown?.key ?? key)
@@ -330,8 +345,9 @@ struct SpaceDot: View {
         .help("\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch")
         .onChange(of: key) { _, now in
             let symbol = symbol
+            let emoji = emoji
             DispatchQueue.main.async {
-                withAnimation(.easeOut(duration: 0.22)) { shown = (now, symbol) }
+                withAnimation(.easeOut(duration: 0.22)) { shown = (now, symbol, emoji) }
             }
         }
         .animation(Motion.quick, value: hovering)
@@ -364,10 +380,11 @@ enum SpaceMenu {
         actions = []
         let menu = NSMenu()
         for (index, space) in browser.spaces.enumerated() {
-            let entry = item(space.name, key: index < 9 ? "\(index + 1)" : "", checked: space.id == browser.spaceID) {
+            let emoji = space.mark.flatMap { $0.isValid && $0.kind == .emoji ? $0.value : nil }
+            let entry = item(emoji.map { "\($0) \(space.name)" } ?? space.name, key: index < 9 ? "\(index + 1)" : "", checked: space.id == browser.spaceID) {
                 browser.switchSpace(to: space.id)
             }
-            entry.image = NSImage(systemSymbolName: space.symbol, accessibilityDescription: nil)
+            if emoji == nil { entry.image = NSImage(systemSymbolName: space.symbol, accessibilityDescription: nil) }
             menu.addItem(entry)
         }
         menu.addItem(.separator())
@@ -376,6 +393,12 @@ enum SpaceMenu {
         let here = browser.space
         menu.addItem(item("Rename “\(here.name)”…") {
             Ask.name("Rename Space", placeholder: here.name, initial: here.name, confirm: "Rename") { browser.renameSpace(here.id, to: $0) }
+        })
+        menu.addItem(item("Emoji or Icon…") {
+            GroupEditor.ask(title: "Customize Space", name: here.name, mark: here.mark ?? TabMark(kind: .symbol, value: here.symbol)) { name, mark, _ in
+                browser.renameSpace(here.id, to: name)
+                _ = browser.setSpaceMark(here.id, mark: mark)
+            }
         })
         let icons = NSMenu()
         for (symbol, name) in zip(Spaces.icons, Spaces.iconNames) {

@@ -22,6 +22,7 @@ struct SearchApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { browser.newTab() }
                     .keyboardShortcut("t")
+                Button("New Tab Group…") { browser.askForGroup() }
                 Button("New Private Tab") { browser.newShyTab() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Reopen Closed Tab") { browser.reopen() }
@@ -798,6 +799,11 @@ struct ContentView: View {
     ]
 
     private func take(_ event: NSEvent) -> Bool {
+        guard NSApp.modalWindow == nil, Links.window?.attachedSheet == nil else { return false }
+        if #available(macOS 15.4, *), Extensions.shared.recordingShortcut != nil {
+            if browser.tuning { return Extensions.shared.recordShortcut(event) }
+            Extensions.shared.cancelShortcutRecording()
+        }
         // A small window's keys are its own (see Little.swift).
         if let little = LittleWindow.owning(event.window) { return little.take(event) }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -894,8 +900,7 @@ struct ContentView: View {
             return true
         }
 
-        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
-        // none of ours use those.
+        // Extension bindings are checked against Search's reserved shortcuts.
         if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
            Extensions.shared.take(event) {
             return true
