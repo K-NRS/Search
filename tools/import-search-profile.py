@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import shlex
 import signal
 import stat
 import subprocess
@@ -117,6 +118,10 @@ def merged_preferences(source, before):
     for key in allowed:
         if key in source:
             result[key] = source[key]
+    if 'sidebar' not in source and 'manner' in source:
+        result['sidebar'] = source['manner'] == 'side'
+    if 'bars.height' not in source and 'bars.compact' in source:
+        result['bars.height'] = 30 if source['bars.compact'] else 52
     for key in list(result):
         if key.startswith(('extensions.settings.', 'extensions.newtab.', 'extensions.granted.', 'capture.')):
             result.pop(key)
@@ -153,12 +158,14 @@ def snapshot(root):
         elif stat.S_ISREG(st.st_mode):
             digest.update(b'F'+rel.encode('utf-8')+b'\0')
             h = hashlib.sha256()
+            head = b''
             with path.open('rb') as f:
                 for chunk in iter(lambda: f.read(1024*1024), b''):
+                    if not head: head = chunk[:4]
                     h.update(chunk)
             digest.update(h.digest())
             total += st.st_size; files += 1
-            cookies += int(path.name.lower().endswith('.binarycookies'))
+            cookies += int(head == b'cook')  # Independent of staged/backup file names.
         else:
             raise Refusal('Sembolik baglanti veya desteklenmeyen dosya: '+str(path))
     walk(root, '')
@@ -301,7 +308,7 @@ def import_profile(apply=False):
                 staged = backup/'staging'/str(i)
                 copy_data(a, staged)
                 if snapshot(staged) != src[i]:
-                    raise Refusal('Hazirlanan veri kopyasi dogrulanamadi.')
+                    raise Refusal('Hazirlanan veri kopyasi dogrulanamadi: '+pairs[i][2])
         closed_apps()
         if [snapshot(a) for a,_,_ in pairs] != src or [snapshot(b) for _,b,_ in pairs] != old:
             raise Refusal('Kopyalama sirasinda profil degisti; iki uygulama da kapali kalmali.')
@@ -323,7 +330,7 @@ def import_profile(apply=False):
             raise Refusal('Resmi tercihler islem sirasinda degisti.')
         j['state']='complete'; write_journal(backup,j)
         print('Aktarim tamamlandi ve dosyalar dogrulandi. Resmi Search verileri degistirilmedi.')
-        print('Geri alma: python3 '+repr(str(Path(__file__).resolve()))+' --restore '+repr(str(backup)))
+        print('Geri alma: python3 '+shlex.quote(str(Path(__file__).resolve()))+' --restore '+shlex.quote(str(backup)))
         print('Simdi Search Personal uygulamasini acabilirsiniz. Yedegi kimseyle paylasmayin; oturum verileri icerir.')
         return backup
     except BaseException:
