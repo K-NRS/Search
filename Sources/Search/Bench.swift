@@ -534,6 +534,15 @@ final class Bench {
                 ) else { continue }
                 NSApp.postEvent(event, atStart: false)
             }
+            // Optional complete chord for tests that exercise modifier-release
+            // behavior. Omit it to keep a modifier held across multiple presses.
+            if request["release"] as? Bool == true,
+               let released = NSEvent.keyEvent(with: .flagsChanged, location: .zero,
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: Links.window?.windowNumber ?? 0, context: nil,
+                    characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 59) {
+                NSApp.postEvent(released, atStart: false)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 answer(["active": browser.active.map { String($0.id.uuidString.prefix(8)).lowercased() } ?? ""])
             }
@@ -1269,6 +1278,12 @@ final class Bench {
                     }
                 }
             }
+
+        #if DEBUG
+        case "tab-shortcut-ui":
+            guard Store.testing else { answer(["error": "test process required"]); return }
+            answer(TabShortcutProbe.run(request))
+        #endif
 
         case "ui":
             // Open or close the app's own panels, to reproduce what a person

@@ -9,12 +9,20 @@ import Combine
 @MainActor
 final class Browser: NSObject, ObservableObject {
     @Published private(set) var tabs: [Tab] = []
+    private var recentTabIDs: [UUID] = []
+    private var tabCycle: (space: UUID, order: [UUID], modifiers: NSEvent.ModifierFlags)?
+    private var steppingTabCycle = false
     @Published var activeID: Tab.ID? {
         didSet {
             // The tab just left is the tab just looked at. Whether a tab has
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
-            guard oldValue != activeID, let old = oldValue else { return }
+            guard oldValue != activeID else { return }
+            if !steppingTabCycle {
+                tabCycle = nil
+                rememberTabUse()
+            }
+            guard let old = oldValue else { return }
             linkStatus.dismiss()
             tabs.first { $0.id == old }?.touch()
         }
@@ -1092,6 +1100,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func select(_ tab: Tab) {
+        if !steppingTabCycle { finishTabCycle() }
         // A peek is over the tab it was opened from; another tab puts it away.
         if peekTab != nil, tab.id != activeID { closePeek() }
         revealGroup(of: tab)
@@ -1257,6 +1266,54 @@ final class Browser: NSObject, ObservableObject {
         guard tabs.count > 1, let here = tabs.firstIndex(where: { $0.id == activeID }) else { return }
         let next = (here + direction + tabs.count) % tabs.count
         select(tabs[next])
+    }
+
+    /// A held chord walks a frozen MRU list. Merely passing through a tab must
+    /// not put it ahead of the origin when the next cycling gesture starts.
+    func cycleTab(_ direction: Int, modifiers: NSEvent.ModifierFlags = []) {
+        let held = modifiers.intersection([.command, .control, .option])
+        if let cycle = tabCycle,
+           cycle.space != spaceID || !held.isSuperset(of: cycle.modifiers) {
+            finishTabCycle()
+        }
+        let members = tabs.map(\.id)
+        let available = Set(members)
+        guard members.count > 1, let activeID, available.contains(activeID) else {
+            finishTabCycle()
+            return
+        }
+        if tabCycle == nil {
+            let recent = recentTabIDs.filter { available.contains($0) && $0 != activeID }
+            let visited = Set(recent + [activeID])
+            let order = [activeID] + recent + members.filter { !visited.contains($0) }
+            tabCycle = (spaceID, order, held)
+        }
+        // Closed/moved tabs can disappear while the modifier is still held.
+        tabCycle?.order.removeAll { !available.contains($0) }
+        guard let order = tabCycle?.order, let here = order.firstIndex(of: activeID),
+              let next = tabs.first(where: { $0.id == order[(here + direction % order.count + order.count) % order.count] })
+        else { finishTabCycle(); return }
+        steppingTabCycle = true
+        select(next)
+        steppingTabCycle = false
+        if held.isEmpty { finishTabCycle() }
+    }
+
+    func updateTabCycleModifiers(_ flags: NSEvent.ModifierFlags) {
+        guard let cycle = tabCycle, !flags.isSuperset(of: cycle.modifiers) else { return }
+        finishTabCycle()
+    }
+
+    func finishTabCycle() {
+        guard tabCycle != nil else { return }
+        tabCycle = nil
+        rememberTabUse()
+    }
+
+    private func rememberTabUse() {
+        let available = Set((tabs + parkedTabs).map(\.id))
+        recentTabIDs.removeAll { $0 == activeID || !available.contains($0) }
+        if let activeID, available.contains(activeID) { recentTabIDs.insert(activeID, at: 0) }
     }
 
     func select(index: Int) {

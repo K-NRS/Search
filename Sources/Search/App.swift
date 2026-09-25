@@ -110,10 +110,7 @@ struct SearchApp: App {
                     .keyboardShortcut("]")
                     .disabled(browser.active?.canGoForward != true)
                 Divider()
-                Button("Next Tab") { browser.step(1) }
-                    .keyboardShortcut("]", modifiers: [.command, .shift])
-                Button("Previous Tab") { browser.step(-1) }
-                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                TabCyclingMenu(browser: browser, prefs: browser.prefs)
                 Button("Search Tabs…") { browser.summon() }
                     .keyboardShortcut("k")
                 Divider()
@@ -255,6 +252,21 @@ private final class CursorGroundView: NSView {
     override func layout() {
         super.layout()
         window?.invalidateCursorRects(for: self)
+    }
+}
+
+/// Observe preferences when SwiftUI rebuilds the menu; Preferences also updates
+/// the existing native menu immediately while it is closed.
+private struct TabCyclingMenu: View {
+    let browser: Browser
+    @ObservedObject var prefs: Preferences
+
+    var body: some View {
+        ForEach(TabDirection.allCases) { direction in
+            let shortcut = prefs.tabShortcut(for: direction)
+            Button(direction.title) { browser.cycleTab(direction.step) }
+                .keyboardShortcut(shortcut.equivalent, modifiers: shortcut.eventModifiers)
+        }
     }
 }
 
@@ -492,6 +504,7 @@ struct ContentView: View {
             // buttons, and on a light window they come out nearly white. Ours
             // go on in their place until the app comes back.
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                browser.finishTabCycle()
                 measureLights()
                 resting?.isHidden = false
                 // Only the window you were in, or every window's video would come.
@@ -754,10 +767,15 @@ struct ContentView: View {
     /// keystrokes because this runs first.
     private func watchKeys() {
         guard keys == nil else { return }
-        keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            guard event.type == .keyDown else {
+        keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown]) { event in
+            if event.type == .flagsChanged {
+                browser.updateTabCycleModifiers(event.modifierFlags)
                 // ⌘ let go of ends a ⌘K walk, wherever it stopped.
                 if !event.modifierFlags.contains(.command) { browser.landSummon() }
+                return event
+            }
+            guard event.type == .keyDown else {
+                browser.finishTabCycle()
                 return event
             }
             return take(event) ? nil : event
@@ -782,7 +800,6 @@ struct ContentView: View {
     /// between them stay Search's first, as Chrome keeps them its own.
     private func pageFirst(_ event: NSEvent, key: String, shifted: Bool) -> Bool {
         let reserved = (key == "t") || (key == "w" && !shifted) || (key == "n" && shifted)
-            || ((key == "[" || key == "]" || key == "{" || key == "}") && shifted)
             || (key == "z" && browser.veiling)
         guard !reserved, event.window?.firstResponder is PageView else { return false }
         if let passed = ContentView.passed, PageView.same(passed, event) {
@@ -808,6 +825,15 @@ struct ContentView: View {
         if let little = LittleWindow.owning(event.window) { return little.take(event) }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if !TabDirection.allCases.contains(where: { browser.prefs.tabShortcut(for: $0).matches(event) }) {
+            browser.finishTabCycle()
+        }
+
+        if browser.prefs.recordingTabShortcut != nil, browser.tuning,
+           event.window === Links.window {
+            browser.prefs.recordTabShortcut(event)
+            return true
+        }
 
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
@@ -870,19 +896,15 @@ struct ContentView: View {
             return true
         }
 
-        // Tab is the page's: it moves between a form's fields and a page's
-        // links, as in every browser. It used to walk the row of tabs, which
-        // took it from anyone filling in a form. ⌃Tab walks the row and comes
-        // round to the first again, ⌃⇧Tab the other way — the keys every
-        // other browser uses for that.
-        //
-        // While an address is being typed, the list under the field is what
-        // there is to move through, and Return takes whatever the walk landed on.
-        if event.keyCode == 48, !flags.contains(.command), !flags.contains(.option) {
-            if flags.contains(.control) {
-                browser.step(flags.contains(.shift) ? -1 : 1)
+        if event.window === Links.window {
+            for direction in TabDirection.allCases where browser.prefs.tabShortcut(for: direction).matches(event) {
+                browser.cycleTab(direction.step, modifiers: flags)
                 return true
             }
+        }
+
+        // Plain Tab still moves through page fields or address suggestions.
+        if event.keyCode == 48, flags.intersection([.command, .option, .control]).isEmpty {
             if browser.editingTab != nil { return true }
             if browser.fieldShowing, !browser.offers.isEmpty {
                 browser.walk(flags.contains(.shift) ? -1 : 1)
@@ -1013,10 +1035,10 @@ struct ContentView: View {
             browser.reload()
         case "r" where shifted:
             browser.toggleReader()
-        case "[":
-            shifted ? browser.step(-1) : browser.back()
-        case "]":
-            shifted ? browser.step(1) : browser.forward()
+        case "[" where !shifted:
+            browser.back()
+        case "]" where !shifted:
+            browser.forward()
         default:
             // Moving or selecting text belongs to the editor, not the page's
             // history — in web forms and in the browser's own fields alike.
