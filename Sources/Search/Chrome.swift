@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import CoreImage
+import WebKit
 
 enum ChromeAccent: String, CaseIterable, Identifiable {
     case page, graphite, blue, purple, pink, red, orange, green
@@ -44,6 +45,30 @@ struct PageChrome {
     var top: CGFloat = 0
     var side: CGFloat = 0
     var radius: Double = 0
+
+    /// Only overlay real web content when WebKit can reserve its layout viewport.
+    /// Older SDKs/OS versions use an ordinary, unobscured view frame instead.
+    static var supportsViewportInsets: Bool {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+
+    @MainActor
+    func apply(to web: WKWebView) {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            let value = NSEdgeInsets(top: max(0, min(top, web.bounds.height)),
+                                    left: max(0, min(side, web.bounds.width)), bottom: 0, right: 0)
+            let old = web.obscuredContentInsets
+            // Avoid a new WebKit layout on every native layout pass.
+            if old.top != value.top || old.left != value.left || old.bottom != 0 || old.right != 0 {
+                web.obscuredContentInsets = value
+            }
+        }
+        #endif
+    }
 }
 
 /// Lives beside the WebKit view so its background contains the rendered page.

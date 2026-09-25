@@ -152,7 +152,15 @@ final class StageView: NSView {
     private weak var wanted: NSView?
     private var allowed: (() -> Bool)?
     private var chrome = PageChrome()
-    private let blur = BackgroundBlurView(frame: .zero)
+    private let topBlur = BackgroundBlurView(frame: .zero)
+    private let sideBlur = BackgroundBlurView(frame: .zero)
+
+    override func willRemoveSubview(_ subview: NSView) {
+        // Mini, Peek, Float and fullscreen reuse the very same web view. A
+        // departing page must not carry this window's chrome into that surface.
+        if let web = subview as? WKWebView { PageChrome().apply(to: web) }
+        super.willRemoveSubview(subview)
+    }
 
     override func layout() {
         super.layout()
@@ -181,11 +189,15 @@ final class StageView: NSView {
         // web view, and shrinks the page to make room. Taken out on the next
         // resize, it left the page shrunk beside nothing (#91).
         let docked = inspecting
-        for view in subviews where view !== wanted && view !== blur && !(docked && Self.isInspector(view)) {
+        for view in subviews where view !== wanted && view !== topBlur && view !== sideBlur && !(docked && Self.isInspector(view)) {
             view.removeFromSuperview()
         }
 
-        guard let wanted, window != nil else { blur.removeFromSuperview(); return }
+        guard let wanted, window != nil else {
+            topBlur.removeFromSuperview()
+            sideBlur.removeFromSuperview()
+            return
+        }
         if wanted.superview !== self {
             // A web view can have only one superview, so taking it back is how
             // it is taken back.
@@ -206,15 +218,24 @@ final class StageView: NSView {
         if !(docked && subviews.contains(where: Self.isInspector)) {
             wanted.frame = bounds
         }
-        if chrome.radius > 0, chrome.top > 0 || chrome.side > 0 {
-            if subviews.last !== blur { addSubview(blur, positioned: .above, relativeTo: wanted) }
-            blur.frame = chrome.side > 0
-                ? NSRect(x: 0, y: 0, width: min(bounds.width, chrome.side), height: bounds.height)
-                : NSRect(x: 0, y: bounds.height - chrome.top, width: bounds.width, height: chrome.top)
-            blur.setRadius(chrome.radius)
-        } else {
+        if let web = wanted as? WKWebView { chrome.apply(to: web) }
+        let side = min(bounds.width, max(0, chrome.side))
+        let top = min(bounds.height, max(0, chrome.top))
+        // In sidebar mode a bookmarks bar can obscure the top as well. Use
+        // disjoint rectangles: their corner must not receive Gaussian blur twice.
+        place(sideBlur, in: NSRect(x: 0, y: 0, width: side, height: bounds.height), above: wanted)
+        place(topBlur, in: NSRect(x: side, y: bounds.height - top,
+                                  width: bounds.width - side, height: top), above: wanted)
+    }
+
+    private func place(_ blur: BackgroundBlurView, in frame: NSRect, above page: NSView) {
+        guard chrome.radius > 0, frame.width > 0, frame.height > 0 else {
             blur.removeFromSuperview()
+            return
         }
+        if blur.superview !== self { addSubview(blur, positioned: .above, relativeTo: page) }
+        blur.frame = frame
+        blur.setRadius(chrome.radius)
     }
 
     /// Whether the page on show has its Web Inspector up. WebKit answers only

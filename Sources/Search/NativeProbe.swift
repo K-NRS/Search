@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import WebKit
 import ScreenCaptureKit
 
 /// Native appearance checks in an isolated SEARCH_PROBE process only.
@@ -13,6 +14,56 @@ enum NativeProbe {
         }
         let window = Links.window
         switch request["action"] as? String ?? "nodes" {
+        case "chrome-config":
+            // Guarded by Store.testing above; this entire file is DEBUG-only.
+            browser.welcoming = false
+            browser.tuning = false
+            if let value = request["height"] as? Double { browser.prefs.topBarHeight = min(52, max(30, value)) }
+            if let value = request["transparency"] as? Double { browser.prefs.chromeTransparency = min(1, max(0, value)) }
+            if let value = request["blur"] as? Double { browser.prefs.chromeBlur = min(1, max(0, value)) }
+            if let value = request["sidebar"] as? Bool { browser.prefs.sidebar = value }
+            if let value = request["folded"] as? Bool { browser.folded = value }
+            if let value = request["peeking"] as? Bool { browser.peeking = value }
+            if let value = request["bookmarksBar"] as? Bool {
+                if value, let url = browser.active?.address { browser.bookmarks.add(url, title: "Viewport fixture") }
+                browser.prefs.bookmarksBar = value
+            }
+            return ["configured": true]
+        case "chrome-geometry":
+            guard let window, let web = browser.active?.built else { return ["error": "active view required"] }
+            let frame = web.convert(web.bounds, to: nil)
+            var inset = NSEdgeInsetsZero
+            var supportsInsets = false
+            #if compiler(>=6.2)
+            if #available(macOS 26.0, *) {
+                inset = web.obscuredContentInsets
+                supportsInsets = true
+            }
+            #endif
+            return ["frame": [frame.minX, window.frame.height - frame.maxY, frame.width, frame.height],
+                    "window": [window.frame.width, window.frame.height],
+                    "insets": [inset.top, inset.left, inset.bottom, inset.right],
+                    "supportsInsets": supportsInsets,
+                    "sidebar": browser.prefs.sidebar, "sideWidth": browser.prefs.sideWidth,
+                    "height": browser.prefs.topBarHeight, "bookmarksHeight": BookmarksBar.height,
+                    "folded": browser.folded, "peeking": browser.peeking,
+                    "reducedTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+                    "webID": String(describing: ObjectIdentifier(web)),
+                    "stage": web.superview.map { String(describing: type(of: $0)) } ?? "none"]
+        case "chrome-pointer":
+            guard let window, let x = request["x"] as? Double, let y = request["y"] as? Double else {
+                return ["error": "window coordinates required"]
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            let point = NSPoint(x: x, y: window.frame.height - y)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+                NSApp.postEvent(event, atStart: false)
+            }
+            return ["posted": true]
         case "accent":
             let color = NSColor(browser.prefs.chromeAccent.resolved(for: browser.active?.pageAccent))
                 .usingColorSpace(.deviceRGB) ?? .black

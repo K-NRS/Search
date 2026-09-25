@@ -302,7 +302,9 @@ struct ContentView: View {
             (browser.active?.immersed == true ? Color.black : Palette.ground)
 
             // One stage, always. It starts beside the column and under the
-            // strip by default. Transparency lets the page extend beneath them.
+            // strip by default. On supported WebKit versions only its painted
+            // background extends under transparent chrome; its layout viewport
+            // is inset so fixed/sticky site headers and page controls stay visible.
             //
             // When the column or the strip comes or goes, the page slides with
             // it and is resized once, not on every frame of the slide: laid out
@@ -347,8 +349,8 @@ struct ContentView: View {
     private var stage: some View {
         if let tab = browser.active {
             Page(tab: tab, chrome: PageChrome(
-                top: overlayChrome && !browser.prefs.sidebar ? visibleTop : 0,
-                side: overlayChrome && browser.prefs.sidebar && (sidebar || browser.peeking) ? browser.prefs.sideWidth : 0,
+                top: overlayChrome ? visibleTop : 0,
+                side: overlayChrome ? visibleSide : 0,
                 radius: browser.prefs.chromeBlur * 30
             ))
                 .overlay {
@@ -376,12 +378,18 @@ struct ContentView: View {
     }
 
     private var overlayChrome: Bool {
-        browser.prefs.chromeTransparency > 0 && !reduceTransparency
+        PageChrome.supportsViewportInsets && browser.prefs.chromeTransparency > 0 && !reduceTransparency
     }
 
     private var visibleTop: CGFloat {
         guard browser.active?.immersed != true else { return 0 }
-        return browser.folded && browser.peeking ? browser.prefs.topBarHeight : chrome.height
+        return !browser.prefs.sidebar && browser.folded && browser.peeking
+            ? browser.prefs.topBarHeight : chrome.height
+    }
+
+    private var visibleSide: CGFloat {
+        guard browser.active?.immersed != true else { return 0 }
+        return browser.prefs.sidebar && (sidebar || browser.peeking) ? browser.prefs.sideWidth : 0
     }
 
     /// The footprint of the visible chrome, whether reserved or overlaid.
