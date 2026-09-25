@@ -27,7 +27,7 @@ function run(argv) {
     var values = $.NSDictionary.alloc.initWithContentsOfFile(argv[1]);
     var prefs = $.NSUserDefaults.standardUserDefaults;
     prefs.setPersistentDomainForName(values, argv[0]);
-    if (!prefs.synchronize()) throw new Error('Tercihler kalici depoya yazilamadi.');
+    if (!prefs.synchronize) throw new Error('Tercihler kalici depoya yazilamadi.');
 }
 JS
 }
@@ -165,7 +165,7 @@ function run(argv) {
     var values = $.NSDictionary.alloc.initWithContentsOfFile(argv[1]);
     var prefs = $.NSUserDefaults.standardUserDefaults;
     prefs.setPersistentDomainForName(values, argv[0]);
-    if (!prefs.synchronize()) throw new Error('Geri alma kalici depoya yazilamadi.');
+    if (!prefs.synchronize) throw new Error('Geri alma kalici depoya yazilamadi.');
 }
 JS
 printf 'Aktarimdan onceki Personal tercihleri geri yuklendi. Search Personal uygulamasini acabilirsiniz.\n'
