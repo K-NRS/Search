@@ -46,7 +46,7 @@ final class ExtensionOffscreen: NSObject, WKNavigationDelegate, WKWebExtensionTa
               let frame = sender["frameId"] as? Int, frame > 0,
               let tab = sender["tab"] as? [String: Any],
               let tabID = document.tabID, tab["id"] as? Int == tabID,
-              tab["url"] as? String == document.url.absoluteString else { return ["handled": false] }
+              tab["url"] as? String == document.web.url?.absoluteString else { return ["handled": false] }
         // A worker and several extension pages may hear the same relay.
         // They share one delivery and one reply, never repeat its side effects.
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any, Error>) in
@@ -114,9 +114,10 @@ final class ExtensionOffscreen: NSObject, WKNavigationDelegate, WKWebExtensionTa
     }
 
     private var context: [String: Any] {
-        ["contextId": contextID, "contextType": "OFFSCREEN_DOCUMENT",
-         "documentId": documentID, "documentUrl": url.absoluteString,
-         "documentOrigin": "\(url.scheme ?? "")://\(url.host ?? "")\(url.port.map { ":\($0)" } ?? "")",
+        let current = web.url ?? url
+        return ["contextId": contextID, "contextType": "OFFSCREEN_DOCUMENT",
+         "documentId": documentID, "documentUrl": current.absoluteString,
+         "documentOrigin": "\(current.scheme ?? "")://\(current.host ?? "")\(current.port.map { ":\($0)" } ?? "")",
          "frameId": 0, "tabId": -1, "windowId": -1, "incognito": false]
     }
 
@@ -187,11 +188,11 @@ final class ExtensionOffscreen: NSObject, WKNavigationDelegate, WKWebExtensionTa
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        close(error: error)
+        if !ready { close(error: error) }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        close(error: error)
+        if !ready { close(error: error) }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

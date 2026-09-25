@@ -102,6 +102,9 @@ window.run = async function(command, previous) {
           'create resolves with page scripts ready for immediate runtime messaging');
       } catch (error) { check(false, 'immediate runtime message: ' + error); }
       check(await chrome.offscreen.hasDocument(), 'hasDocument reports the created document');
+      const background = await chrome.runtime.getContexts({contextTypes: ['BACKGROUND']});
+      check(background.length === (window.owner === 'A' ? 1 : 0),
+        'background discovery remains available independently of offscreen discovery');
       const found = await contexts({});
       check(found.length === 1, 'getContexts returns exactly one own offscreen document');
       const context = found[0];
@@ -117,7 +120,7 @@ window.run = async function(command, previous) {
         const filters = {contextIds: [context.contextId], contextTypes: ['OFFSCREEN_DOCUMENT'],
           documentIds: [context.documentId], documentOrigins: [origin], documentUrls: [url],
           frameIds: [0], tabIds: [-1], windowIds: [-1]};
-        const wrong = {contextIds: ['missing'], contextTypes: ['BACKGROUND'], documentIds: ['missing'],
+        const wrong = {contextIds: ['missing'], contextTypes: ['SIDE_PANEL'], documentIds: ['missing'],
           documentOrigins: ['https://unrelated.invalid'], documentUrls: [url + '?unrelated'],
           frameIds: [999], tabIds: [999], windowIds: [999]};
         for (const [key, values] of Object.entries(filters)) {
@@ -153,6 +156,8 @@ window.run = async function(command, previous) {
         'iframe content script forwards real DOM text through runtime messaging');
     } else if (command === 'frame-status') {
       const status = await timeout(chrome.runtime.sendMessage({type: 'OFFSCREEN_FRAME_STATUS'}));
+      result.frameStatus = status;
+      result.frameSource = window.frameSource || null;
       check(status?.deliveries === 1, 'iframe message reaches its offscreen listener exactly once');
       check(status?.sender?.url === window.frameURL && status?.sender?.frameId > 0 &&
         status?.sender?.id === chrome.runtime.id && (window.owner === 'B' ||
@@ -337,6 +342,7 @@ def main():
                 manifest = {"manifest_version": 3, "name": "Search offscreen regression " + label,
                             "description": "Verify real offscreen documents, messaging, context filters and isolation.",
                             "version": "1.0", "permissions": ["offscreen", "tabs"],
+                            "action": {"default_popup": "popup.html"},
                             "host_permissions": ["http://127.0.0.1/*"],
                             "content_scripts": [{"matches": ["http://127.0.0.1/*"], "js": ["content.js"],
                                                  "all_frames": True, "run_at": "document_end"}]}
@@ -345,6 +351,9 @@ def main():
                     (directory / "background.js").write_text(BACKGROUND)
                 (directory / "manifest.json").write_text(json.dumps(manifest))
                 (directory / "host.html").write_text('<!doctype html><title>Offscreen controller</title><script src="host.js"></script>')
+                # A tab at the declared popup URL also gets Search's popup compatibility shim.
+                # Keep the controller URL separate from the popup we exercise below.
+                (directory / "popup.html").write_text('<!doctype html><title>Offscreen popup</title><script src="host.js"></script>')
                 frame_url = origin + "/frame?owner=" + label
                 (directory / "host.js").write_text("window.owner = " + json.dumps(label) +
                     "; window.frameURL = " + json.dumps(frame_url) + ";\n" + HOST)
@@ -411,8 +420,20 @@ def main():
                 run("B", "isolated", other)
             run("A", "close")
             run("B", "close")
+            ask("ext-press", id=extensions["A"])
+            poll(lambda: ask("ext-popup", id=extensions["A"], js="typeof window.run === 'function'").get("value"))
+            ask("ext-popup", id=extensions["A"], js="window.discovery = null; chrome.runtime.getContexts({}).then(value => window.discovery = value); true")
+            discovery = poll(lambda: ask("ext-popup", id=extensions["A"], js="window.discovery").get("value"))
+            types = sorted(item["contextType"] for item in discovery)
+            message = "background and popup contexts remain discoverable after offscreen teardown"
+            ok = types == ["BACKGROUND", "POPUP"]
+            results.append({"extension": "A", "operation": "other-contexts", "contextTypes": types,
+                            "checks": [{"ok": ok, "message": message}], "errors": [] if ok else [message]})
         print(json.dumps(results, indent=2))
         return int(any(result["errors"] for result in results))
+    except Exception:
+        print(json.dumps(results, indent=2), flush=True)
+        raise
     finally:
         server.release.set()
         cleanup_errors = []
