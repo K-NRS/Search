@@ -138,6 +138,9 @@ marker:window.pageMarker,form:document.querySelector('#form').value,clicks:windo
         config(transparency=.8, folded=True)
         verify('folded-sidebar', tab, sidebar=True, folded=True)
         config(sidebar=False)
+        # Switching layouts intentionally resets the transient fold state.
+        # Fold the new layout only after that onChange has completed.
+        config(folded=True, peeking=False)
         verify('folded-top', tab, folded=True)
         config(folded=False)
         run.ask('resize', width=980, height=700)
