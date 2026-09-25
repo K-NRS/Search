@@ -1,0 +1,45 @@
+name: Verify complete profile copy
+on:
+  push:
+    branches: [knrs/integrated-2026-09-25]
+    paths:
+      - tools/import-search-profile.py
+      - validation/profile-copy-test.py
+      - .github/workflows/profile-copy.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Search-Personal-viewport-fix-universal
+          run-id: 36145098698
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/package
+      - name: Verify the exact shipped package and exercise full profile copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd "$RUNNER_TEMP/package" && shasum -a 256 -c SHA256SUMS)
+          ditto -x -k "$RUNNER_TEMP/package/Search-Personal-universal.zip" "$RUNNER_TEMP/unpacked"
+          python3 validation/profile-copy-test.py --app "$RUNNER_TEMP/unpacked/Search Personal.app" --script tools/import-search-profile.py 2>&1 | tee profile-copy-test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: profile-copy-${{ matrix.os }}
+          path: |
+            profile-copy-test-report.json
+            profile-copy-test.log
+            tools/import-search-profile.py
+          retention-days: 14
+          if-no-files-found: error
