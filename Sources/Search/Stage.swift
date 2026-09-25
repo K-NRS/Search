@@ -11,6 +11,7 @@ import WebKit
 /// what turns that into a redraw.
 struct Page: View {
     @ObservedObject var tab: Tab
+    var surface: TabSurface = .tab
 
     var body: some View {
         ZStack {
@@ -21,7 +22,8 @@ struct Page: View {
             // before and after the float changes nothing SwiftUI can see, so
             // the stage was never told to take it back when it landed, and
             // the tab stayed empty. Nothing, then the page, is a change.
-            WebStage(page: tab.isBlank || tab.asleep || tab.floating ? nil : tab.web)
+            WebStage(page: tab.isBlank || tab.asleep || tab.floating || tab.surface != surface ? nil : tab.web,
+                     allowed: { [weak tab] in tab?.surface == surface })
 
             if let cover = tab.cover {
                 // The page as it was left, while it is rebuilt underneath —
@@ -124,11 +126,12 @@ private struct Disc: View {
 /// reload, no lost scroll position, no forgotten form.
 struct WebStage: NSViewRepresentable {
     let page: NSView?
+    var allowed: (() -> Bool)? = nil
 
     func makeNSView(context: Context) -> StageView { StageView() }
 
     func updateNSView(_ view: StageView, context: Context) {
-        view.show(page)
+        view.show(page, allowed: allowed)
     }
 }
 
@@ -145,18 +148,21 @@ final class StageView: NSView {
     /// Now there is one fact and one rule: show `wanted`, and put that right on
     /// every layout. Nothing to fall out of step with.
     private weak var wanted: NSView?
+    private var allowed: (() -> Bool)?
 
     override func layout() {
         super.layout()
         settle()
     }
 
-    func show(_ page: NSView?) {
+    func show(_ page: NSView?, allowed: (() -> Bool)? = nil) {
         wanted = page
+        self.allowed = allowed
         settle()
     }
 
     private func settle() {
+        if allowed?() == false { wanted = nil }
         // A video filling the screen has its page lent to WebKit's own
         // window, with a placeholder left here in its place. The chrome
         // stepping aside lays this stage out again in that same moment, and

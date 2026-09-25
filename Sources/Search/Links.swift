@@ -104,41 +104,23 @@ final class Links: NSObject, NSApplicationDelegate {
     /// The browser, once it has a window. Anything that came earlier is
     /// handed over now — but none of it before the window is on screen.
     ///
-    /// Five addresses at launch used to mean five web views built before the
-    /// first frame, and a window that took a second to appear instead of a
-    /// third of one. Now the window comes first; the first page goes into
-    /// the blank tab that is already there, and the others fill in behind
-    /// it, a few frames apart, in the order they came.
+    /// The main window draws before queued pages start loading. External
+    /// links then open in Mini by default, staggered in arrival order. With
+    /// Mini disabled, the first uses a blank tab and later links open behind it.
     @MainActor
     static func hand(to browser: Browser) {
-        deliver = { [weak browser] url in
-            // In a small window of its own, for whoever chose that.
-            if let browser, browser.prefs.littleLinks {
-                LittleWindow.show(url, for: browser)
-                return
-            }
-            browser?.arrive(url)
-            // The window closed with the app still running: the link brings
-            // it back, rather than landing in a tab nobody can see. The
-            // window is looked for among the app's own too: a reference that
-            // lapsed opened a second, empty window behind the other app.
-            if let window = window ?? browserWindow() {
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
-            }
-            comeForward()
-        }
+        deliver = { [weak browser] url in browser?.receiveExternal(url) }
         flush = { [weak browser] in browser?.flushSession() }
         let early = waiting
         waiting = []
         guard let first = early.first else { return }
         onceShown { [weak browser] in
-            browser?.arrive(first)
-            comeForward()
+            browser?.receiveExternal(first)
             for (n, url) in early.dropFirst().enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15 * Double(n + 1)) { [weak browser] in
-                    browser?.open(url, foreground: false, atEnd: true)
+                    guard let browser else { return }
+                    if browser.prefs.miniLinks || browser.prefs.littleLinks { browser.receiveExternal(url) }
+                    else { browser.open(url, foreground: false, atEnd: true) }
                 }
             }
         }
@@ -163,7 +145,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// asked to open something, and asks with `activate()`; the old call's
     /// "ignoring other apps" is ignored.
     @MainActor
-    private static func comeForward() {
+    static func comeForward() {
         if #available(macOS 14, *) {
             NSApp.activate()
         } else {
@@ -174,7 +156,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// The browser's window, from the app's own list: what `window` points
     /// at, found again if that reference lapsed.
     @MainActor
-    private static func browserWindow() -> NSWindow? {
+    static func browserWindow() -> NSWindow? {
         let found = NSApp.windows.first { $0.contentView != nil && !($0 is NSPanel) && $0.canBecomeMain }
         if let found { window = found }
         return found

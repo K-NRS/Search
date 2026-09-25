@@ -154,6 +154,11 @@ enum Muter {
 final class Tab: ObservableObject, Identifiable {
     let id: UUID
     @Published var groupID: UUID?
+    @Published var surface: TabSurface = .tab
+    var previewSpaceID: UUID?
+    @Published var previewFocus = 0
+    @Published var previewFinding = false
+    @Published var previewNeedle = ""
 
     /// The page. Built the first time anyone asks for it, not when the tab
     /// is — a session of twenty tabs coming back is twenty objects, not
@@ -1205,7 +1210,7 @@ final class PageView: WKWebView {
             item.action = #selector(searchSelection(_:))
         }
         guard #available(macOS 15.4, *),
-              let tab = Extensions.shared.browser?.tabs.first(where: { $0.built === self })
+              let tab = Extensions.shared.browser?.tab(for: self)
         else { return }
         let items = Extensions.shared.menuItems(for: tab)
         guard !items.isEmpty else { return }

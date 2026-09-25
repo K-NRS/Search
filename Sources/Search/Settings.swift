@@ -213,8 +213,22 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.autocorrect)
             }
             Rule()
-            Line("Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab") {
+            Line("Open external links in Mini", "Links from other apps open in a compact window. Move to Tab keeps the live page. ⌥⌘N opens Mini from anywhere") {
+                Switch(on: $prefs.miniLinks)
+                    .accessibilityElement()
+                    .accessibilityLabel("Open external links in Mini")
+                    .accessibilityValue(prefs.miniLinks ? "On" : "Off")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { prefs.miniLinks.toggle() }
+            }
+            Rule()
+            Line("Peek from pinned tabs", "Links to another host open over the page. Shift-click always opens Peek; Escape closes it, and ⌘O moves it to a tab") {
                 Switch(on: $prefs.peeksLinks)
+                    .accessibilityElement()
+                    .accessibilityLabel("Preview links from pinned tabs")
+                    .accessibilityValue(prefs.peeksLinks ? "On" : "Off")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { prefs.peeksLinks.toggle() }
             }
             Rule()
             Line("Open links from other apps in a small window", "To read and close, or keep with Open in Search (⌘O)") {
@@ -326,6 +340,8 @@ struct SettingsPanel: View {
             Rule()
             Line("Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.") {
                 Switch(on: $prefs.usesSpaces)
+                    .disabled(prefs.usesSpaces && browser.previewsInOtherSpaces)
+                    .help(browser.previewsInOtherSpaces ? "Move or close previews in other spaces first" : "")
             }
         }
     }
