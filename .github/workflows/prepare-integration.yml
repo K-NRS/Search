@@ -1,0 +1,34 @@
+name: Prepare personal integration
+on:
+  push:
+    branches: [knrs/integrated-2026-09-25]
+    paths: [.github/workflows/prepare-integration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch upstream and preserve the exact source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/driceroland/Search.git
+          git fetch upstream main
+          mkdir -p integration-artifacts
+          git show-ref > integration-artifacts/refs.txt
+          git bundle create integration-artifacts/Search-history.bundle --all
+          git merge-tree --write-tree upstream/main origin/knrs/extension-shortcuts > integration-artifacts/merge-preview.txt || true
+          git log -12 --oneline upstream/main > integration-artifacts/upstream.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Search-integration-history
+          path: integration-artifacts/
+          retention-days: 7
+          if-no-files-found: error
