@@ -4,11 +4,11 @@ on:
     branches: [knrs/integrated-2026-09-25]
     paths:
       - .github/workflows/personal-build.yml
-      - .integration/**
+      - .integration/fix-chrome-viewport.py
+      - validation/chrome-viewport.py
       - Sources/**
       - build-personal.sh
       - Package.swift
-      - tests/**
   workflow_dispatch:
 permissions:
   contents: write
@@ -16,84 +16,88 @@ concurrency:
   group: search-personal-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  build:
-    runs-on: macos-15
-    timeout-minutes: 40
+  viewport:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Prepare logs and verify upstream
+      - name: Record the environment and source
         shell: bash
         run: |
           set -euo pipefail
-          LOGS="$RUNNER_TEMP/search-personal-logs"
+          LOGS="$RUNNER_TEMP/viewport-${{ matrix.os }}"
           mkdir -p "$LOGS"
           echo "LOGS=$LOGS" >> "$GITHUB_ENV"
-          echo "SEARCH_TEST_OUTPUT=$LOGS/tests" >> "$GITHUB_ENV"
-          git remote add upstream https://github.com/driceroland/Search.git
-          git fetch upstream main
-          test "$(git rev-parse upstream/main)" = 491f3214063212fac176a7ad95467f0821040451
-          { sw_vers; uname -m; xcodebuild -version; swift --version; git --version; } | tee "$LOGS/environment.txt"
-      - name: Integrate all six PRs with reviewed conflict resolutions
+          git config user.name 'Search Integration'
+          git config user.email 'noreply@users.noreply.github.com'
+          { sw_vers; uname -m; xcodebuild -version; swift --version; git rev-parse HEAD; } | tee "$LOGS/environment.txt"
+      - name: Reproduce the original overlapping header
         shell: bash
         run: |
           set -euo pipefail
-          python3 .integration/reconcile.py 2>&1 | tee "$LOGS/integration.log"
-          python3 .integration/fixes.py
-          git add -u
-          if ! git diff --cached --quiet; then
-            git commit -m 'fix: resolve integrated build and regression findings'
+          if ! grep -q 'supportsViewportInsets' Sources/Search/Chrome.swift; then
+            python3 .integration/fix-chrome-viewport.py --probes-only
+            swift build -c debug 2>&1 | tee "$LOGS/baseline-build.log"
+            python3 validation/chrome-viewport.py --expect-overlap --output "$LOGS/baseline" 2>&1 | tee "$LOGS/baseline-test.log"
           fi
-          git log -12 --oneline > "$LOGS/commits.txt"
-          git diff --check
-      - name: Compile debug
+      - name: Apply the viewport fix and compile debug
         shell: bash
         run: |
           set -euo pipefail
+          python3 .integration/fix-chrome-viewport.py
+          git add Sources/Search/App.swift Sources/Search/Chrome.swift Sources/Search/Stage.swift Sources/Search/NativeProbe.swift
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: reserve WebKit viewport beneath transparent browser chrome'
+          fi
+          git diff --check
+          git rev-parse HEAD > "$LOGS/source-commit.txt"
           swift build -c debug 2>&1 | tee "$LOGS/debug-build.log"
-      - name: Build universal personal application and verify signature
+      - name: Verify fixed and sticky headers with native pointer events
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 validation/chrome-viewport.py --output "$LOGS/fixed" 2>&1 | tee "$LOGS/viewport-test.log"
+      - name: Build and verify the universal application
+        if: matrix.os == 'macos-26'
         shell: bash
         run: |
           set -euo pipefail
           bash build-personal.sh 2>&1 | tee "$LOGS/release-build.log"
-      - name: Publish the integrated branch without rewriting history
+          mkdir -p "$RUNNER_TEMP/verified-package"
+          (cd build && shasum -a 256 -c SHA256SUMS)
+          ditto -x -k build/Search-Personal-universal.zip "$RUNNER_TEMP/verified-package"
+          python3 validation/package-smoke.py --app "$RUNNER_TEMP/verified-package/Search Personal.app" --output "$LOGS/production" 2>&1 | tee "$LOGS/production-test.log"
+      - name: Publish the verified source without rewriting history
+        if: matrix.os == 'macos-26'
         shell: bash
-        run: |
-          set -euo pipefail
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git rev-parse HEAD | tee "$LOGS/source-commit.txt"
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
       - uses: actions/upload-artifact@v4
+        if: success() && matrix.os == 'macos-26'
         with:
-          name: Search-Personal-universal-macOS
+          name: Search-Personal-viewport-fix-universal
           path: |
             build/Search-Personal-universal.zip
             build/SHA256SUMS
           retention-days: 30
           if-no-files-found: error
-      - name: Run isolated feature regressions
-        id: regressions
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 .integration/run-tests.py 2>&1 | tee "$LOGS/test-run.log"
-      - name: Preserve exact integrated source
+      - name: Preserve diagnostic evidence
         if: always()
         shell: bash
         run: |
-          git bundle create "$LOGS/Search-integrated.bundle" --all
+          git bundle create "$LOGS/Search-viewport.bundle" --all
           git status --short > "$LOGS/worktree-status.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Search-Personal-build-and-tests
-          path: ${{ runner.temp }}/search-personal-logs/
+          name: Search-viewport-evidence-${{ matrix.os }}
+          path: ${{ runner.temp }}/viewport-${{ matrix.os }}/
           retention-days: 14
           if-no-files-found: error
-      - name: Report regression status
-        if: steps.regressions.outcome == 'failure'
-        run: |
-          echo '::warning::Some feature tests failed or were blocked. Read the structured summary; a build success is not a full test pass.'
