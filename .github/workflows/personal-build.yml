@@ -14,7 +14,7 @@ permissions:
   contents: write
 concurrency:
   group: search-personal-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: macos-15
@@ -42,6 +42,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 .integration/reconcile.py 2>&1 | tee "$LOGS/integration.log"
+          python3 .integration/fixes.py
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: resolve integrated build and regression findings'
+          fi
           git log -12 --oneline > "$LOGS/commits.txt"
           git diff --check
       - name: Compile debug
@@ -60,6 +65,14 @@ jobs:
           set -euo pipefail
           git push origin "HEAD:${GITHUB_REF_NAME}"
           git rev-parse HEAD | tee "$LOGS/source-commit.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Search-Personal-universal-macOS
+          path: |
+            build/Search-Personal-universal.zip
+            build/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
       - name: Run isolated feature regressions
         id: regressions
         continue-on-error: true
@@ -79,15 +92,6 @@ jobs:
           name: Search-Personal-build-and-tests
           path: ${{ runner.temp }}/search-personal-logs/
           retention-days: 14
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: Search-Personal-universal-macOS
-          path: |
-            build/Search-Personal-universal.zip
-            build/SHA256SUMS
-          retention-days: 30
           if-no-files-found: error
       - name: Report regression status
         if: steps.regressions.outcome == 'failure'
