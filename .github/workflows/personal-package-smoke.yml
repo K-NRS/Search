@@ -1,0 +1,38 @@
+name: Verify downloadable personal application
+on:
+  push:
+    branches: [knrs/integrated-2026-09-25]
+    paths: [.github/workflows/personal-package-smoke.yml, validation/**]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Search-Personal-universal-macOS
+          run-id: 36139504658
+          github-token: ${{ github.token }}
+          path: package
+      - name: Verify the archive and extract the exact shipped app
+        run: |
+          set -euo pipefail
+          (cd package && shasum -a 256 -c SHA256SUMS)
+          ditto -x -k package/Search-Personal-universal.zip "$RUNNER_TEMP/downloaded-app"
+      - name: Exercise the production app without SEARCH_PROBE
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package-validation"
+          python3 validation/package-smoke.py --app "$RUNNER_TEMP/downloaded-app/Search Personal.app" --output "$RUNNER_TEMP/package-validation" 2>&1 | tee "$RUNNER_TEMP/package-validation/console.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Search-Personal-package-validation
+          path: ${{ runner.temp }}/package-validation/
+          retention-days: 30
+          if-no-files-found: error
