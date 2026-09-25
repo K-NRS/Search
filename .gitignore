@@ -10,3 +10,5 @@ build/
 *.provisionprofile
 *.p12
 *.mobileprovision
+/.build-personal-cross/
+__pycache__/

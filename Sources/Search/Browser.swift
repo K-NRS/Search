@@ -1389,7 +1389,7 @@ final class Browser: NSObject, ObservableObject {
             let parent = row.tabs.first { $0.id == (anchor ?? row.active) }
             tab.groupID = atEnd ? nil : parent?.groupID
             let here = atEnd ? nil : row.tabs.firstIndex { $0.id == parent?.id }
-            let pins = row.tabs.prefix(while: { $0.pinned }).count
+            let pins = row.tabs.prefix(while: { $0.pin != nil }).count
             let place = here.map { max($0 + 1, pins) } ?? row.tabs.count
             row.tabs.insert(tab, at: place)
             parked[destination] = row
