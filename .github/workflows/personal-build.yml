@@ -1,0 +1,95 @@
+name: Build Search Personal
+on:
+  push:
+    branches: [knrs/integrated-2026-09-25]
+    paths:
+      - .github/workflows/personal-build.yml
+      - .integration/**
+      - Sources/**
+      - build-personal.sh
+      - Package.swift
+      - tests/**
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: search-personal-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare logs and verify upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOGS="$RUNNER_TEMP/search-personal-logs"
+          mkdir -p "$LOGS"
+          echo "LOGS=$LOGS" >> "$GITHUB_ENV"
+          echo "SEARCH_TEST_OUTPUT=$LOGS/tests" >> "$GITHUB_ENV"
+          git remote add upstream https://github.com/driceroland/Search.git
+          git fetch upstream main
+          test "$(git rev-parse upstream/main)" = 491f3214063212fac176a7ad95467f0821040451
+          { sw_vers; uname -m; xcodebuild -version; swift --version; git --version; } | tee "$LOGS/environment.txt"
+      - name: Integrate all six PRs with reviewed conflict resolutions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .integration/reconcile.py 2>&1 | tee "$LOGS/integration.log"
+          git log -12 --oneline > "$LOGS/commits.txt"
+          git diff --check
+      - name: Compile debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c debug 2>&1 | tee "$LOGS/debug-build.log"
+      - name: Build universal personal application and verify signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash build-personal.sh 2>&1 | tee "$LOGS/release-build.log"
+      - name: Publish the integrated branch without rewriting history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git rev-parse HEAD | tee "$LOGS/source-commit.txt"
+      - name: Run isolated feature regressions
+        id: regressions
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .integration/run-tests.py 2>&1 | tee "$LOGS/test-run.log"
+      - name: Preserve exact integrated source
+        if: always()
+        shell: bash
+        run: |
+          git bundle create "$LOGS/Search-integrated.bundle" --all
+          git status --short > "$LOGS/worktree-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Search-Personal-build-and-tests
+          path: ${{ runner.temp }}/search-personal-logs/
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Search-Personal-universal-macOS
+          path: |
+            build/Search-Personal-universal.zip
+            build/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
+      - name: Report regression status
+        if: steps.regressions.outcome == 'failure'
+        run: |
+          echo '::warning::Some feature tests failed or were blocked. Read the structured summary; a build success is not a full test pass.'
