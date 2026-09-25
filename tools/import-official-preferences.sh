@@ -19,12 +19,24 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/search-preferences.XXXXXX")"
 BACKUP=""
 ATTEMPTED=0
 SUCCESS=0
+# defaults import merges keys; use the replacement API for exact rollback.
+replace_domain() {
+    /usr/bin/osascript -l JavaScript - "$1" "$2" <<'JS'
+ObjC.import('Foundation');
+function run(argv) {
+    var values = $.NSDictionary.alloc.initWithContentsOfFile(argv[1]);
+    var prefs = $.NSUserDefaults.standardUserDefaults;
+    prefs.setPersistentDomainForName(values, argv[0]);
+    if (!prefs.synchronize()) throw new Error('Tercihler kalici depoya yazilamadi.');
+}
+JS
+}
 finish() {
     local status=$?
     trap - EXIT
     if [[ "$ATTEMPTED" == 1 && "$SUCCESS" != 1 ]]; then
         printf '\nAktarim dogrulanamadi; onceki Personal tercihleri geri yukleniyor.\n' >&2
-        if ! /usr/bin/defaults import "$TARGET_DOMAIN" "$BACKUP/before.plist"; then
+        if ! replace_domain "$TARGET_DOMAIN" "$BACKUP/before.plist"; then
             printf 'Otomatik geri alma basarisiz. Yedek: %s\n' "$BACKUP" >&2
         fi
         [[ "$status" -ne 0 ]] || status=1
@@ -147,12 +159,20 @@ function run(argv) {
 JS
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 /usr/bin/plutil -lint "$HERE/before.plist" >/dev/null
-/usr/bin/defaults import "$TARGET_DOMAIN" "$HERE/before.plist"
+/usr/bin/osascript -l JavaScript - "$TARGET_DOMAIN" "$HERE/before.plist" <<'JS'
+ObjC.import('Foundation');
+function run(argv) {
+    var values = $.NSDictionary.alloc.initWithContentsOfFile(argv[1]);
+    var prefs = $.NSUserDefaults.standardUserDefaults;
+    prefs.setPersistentDomainForName(values, argv[0]);
+    if (!prefs.synchronize()) throw new Error('Geri alma kalici depoya yazilamadi.');
+}
+JS
 printf 'Aktarimdan onceki Personal tercihleri geri yuklendi. Search Personal uygulamasini acabilirsiniz.\n'
 ROLLBACK
 } > "$BACKUP/restore.sh"
 ATTEMPTED=1
-/usr/bin/defaults import "$TARGET_DOMAIN" "$BACKUP/after.plist"
+replace_domain "$TARGET_DOMAIN" "$BACKUP/after.plist"
 /usr/bin/defaults export "$TARGET_DOMAIN" "$WORK/verified.plist"
 same "$BACKUP/after.plist" "$WORK/verified.plist"
 /usr/bin/defaults export "$SOURCE_DOMAIN" "$WORK/source-after.plist"
