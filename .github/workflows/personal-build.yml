@@ -39,6 +39,11 @@ jobs:
           git config user.name 'Search Integration'
           git config user.email 'noreply@users.noreply.github.com'
           { sw_vers; uname -m; xcodebuild -version; swift --version; git rev-parse HEAD; } | tee "$LOGS/environment.txt"
+          # Only this disposable hosted runner is changed, never a user's Mac.
+          # Hosted images otherwise suppress transparency and mask the defect.
+          defaults write com.apple.universalaccess increaseContrast -bool false
+          defaults write com.apple.universalaccess reduceTransparency -bool false
+          swift -e 'import AppKit; print("Reduce transparency:", NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)' | tee "$LOGS/accessibility.txt"
       - name: Reproduce the original overlapping header
         shell: bash
         run: |
