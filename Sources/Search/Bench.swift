@@ -293,6 +293,11 @@ final class Bench {
             answer(PreviewNativeProbe.run(request))
         #endif
 
+        #if DEBUG
+        case "native":
+            answer(NativeProbe.run(request, browser: browser))
+        #endif
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
