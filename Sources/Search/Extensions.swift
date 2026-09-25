@@ -101,9 +101,8 @@ struct ExtensionShortcut: Codable, Equatable {
                 return "Used by Search's navigation or zoom shortcuts."
             }
         }
-        if key == "\t", flags.contains(.control), flags.intersection([.command, .option]).isEmpty {
-            return "Used by Search to switch tabs."
-        }
+        // Next/Previous Tab are reserved by their current native menu entries
+        // below, not by the old fixed Control-Tab defaults.
         func find(in menu: NSMenu?) -> String? {
             for item in menu?.items ?? [] {
                 if let found = find(in: item.submenu) { return found }

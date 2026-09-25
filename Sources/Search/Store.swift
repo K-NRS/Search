@@ -9,6 +9,15 @@ import WebKit
 // make twice.
 
 enum Store {
+    /// Personal builds name their data explicitly; never migrate the installed
+    /// upstream browser's profile into a fork merely because it was launched.
+    static let profileName: String = {
+        guard let name = Bundle.main.object(forInfoDictionaryKey: "SearchProfileName") as? String,
+              !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains(":")
+        else { return "Search" }
+        return name
+    }()
+
     /// A run is a test run if it says so, or if it is being run straight out
     /// of the build folder rather than from an installed app. The second half
     /// is not belt and braces: a development build launched from a terminal
@@ -83,8 +92,8 @@ enum Store {
     static let folder: URL = {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? "Search", isDirectory: true)
-        if !testing {
+        let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? profileName, isDirectory: true)
+        if !testing, profileName == "Search" {
             let old = support.appendingPathComponent("Office Browser", isDirectory: true)
             let files = FileManager.default
             if !files.fileExists(atPath: home.path), files.fileExists(atPath: old.path) {
@@ -116,7 +125,7 @@ enum Store {
     /// where the tabs go must not change yours.
     static let settings: UserDefaults = {
         guard testing else {
-            carryOver(into: .standard)
+            if profileName == "Search" { carryOver(into: .standard) }
             return .standard
         }
         let suite = world == "test" ? "com.officecommun.search.test" : "com.officecommun.search.test.\(world ?? "")"

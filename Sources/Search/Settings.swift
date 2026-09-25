@@ -231,7 +231,7 @@ struct SettingsPanel: View {
                     .accessibilityAction { prefs.peeksLinks.toggle() }
             }
             Rule()
-            Line("Open links from other apps in a small window", "To read and close, or keep with Open in Search (⌘O)") {
+            Line("Use the upstream small window when Mini is off", "Mini takes priority above. With Mini off, this uses the original lightweight window; ⌘O keeps its page") {
                 Switch(on: $prefs.littleLinks)
             }
             Rule()
@@ -581,6 +581,7 @@ struct SettingsPanel: View {
                 Rule()
                 Line("Install updates on its own", "Off, Search still looks once a day and tells you, and installs only when you press Install") {
                     Switch(on: $prefs.installsUpdates)
+                        .disabled(!Updater.enabled)
                 }
                 Rule()
                 Line("Found something wrong?", "Opens a draft with the version already in it") {
@@ -626,6 +627,7 @@ struct SettingsPanel: View {
     }
 
     private var versionDetail: String {
+        if !Updater.enabled { return "Personal fork — upstream updates are disabled to preserve your features. Install new builds from your integration branch." }
         switch updater.stage {
         case .none:
             return updater.lastChecked.map { "Checked \($0.formatted(.relative(presentation: .named))) — once a day on its own" }
@@ -650,7 +652,7 @@ struct SettingsPanel: View {
                     if found == nil { browser.announce("This is the latest one") }
                 }
             }
-            .disabled(updater.checking)
+            .disabled(updater.checking || !Updater.enabled)
         case .fetching:
             Ring(size: 12)
         case .ready:

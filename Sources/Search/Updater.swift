@@ -28,6 +28,9 @@ import Security
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
+    nonisolated static var enabled: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "SearchDisableUpdates") as? Bool != true
+    }
 
     /// Where the file lives. SEARCH_FEED, for a test run, points somewhere
     /// else — and is the only way plain http is accepted, so a build that
@@ -122,6 +125,7 @@ final class Updater: ObservableObject {
     /// At launch: once a day, quietly. A test run, pointed at its own feed,
     /// checks every time.
     func checkIfDue(then say: @escaping (String) -> Void) {
+        guard Self.enabled else { return }
         self.say = say
         Swap.sweep()
         // And again every hour for as long as the app is up — a browser that
@@ -138,6 +142,7 @@ final class Updater: ObservableObject {
     private var clock: Timer?
 
     private func checkIfDue() {
+        guard Self.enabled else { return }
         let last = Store.settings.object(forKey: lastKey) as? Date ?? .distantPast
         guard Updater.overridden || Date().timeIntervalSince(last) > 60 * 60 * 20 else { return }
         check { _ in }
@@ -147,6 +152,7 @@ final class Updater: ObservableObject {
     /// names, or nil when this is the latest; what becomes of it after that
     /// is said through the line handed to `checkIfDue`.
     func check(then done: @escaping (Release?) -> Void) {
+        guard Self.enabled else { done(nil); return }
         guard !checking else { return }
         checking = true
         Task { [weak self] in
@@ -177,6 +183,7 @@ final class Updater: ObservableObject {
     /// Install, because somebody pressed it: the same fetch, checks and swap
     /// as on its own.
     func install() {
+        guard Self.enabled else { return }
         guard case .waiting(let release) = stage else { return }
         take(release)
     }
@@ -186,6 +193,7 @@ final class Updater: ObservableObject {
     /// the bundle this process is running from out from under it, so the
     /// next launch takes the next one.
     private func take(_ release: Release) {
+        guard Self.enabled else { return }
         switch stage {
         case .fetching, .ready: return
         case .none, .offered, .waiting: break

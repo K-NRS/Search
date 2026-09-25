@@ -314,7 +314,7 @@ final class Preferences: ObservableObject {
         floatsOnLeave = store.object(forKey: "float.leave") as? Bool ?? true
         miniLinks = store.object(forKey: "links.mini") as? Bool ?? true
         peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
-        installsUpdates = store.object(forKey: Updater.installKey) as? Bool ?? true
+        installsUpdates = Updater.enabled && (store.object(forKey: Updater.installKey) as? Bool ?? true)
         littleLinks = store.bool(forKey: "links.little")
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
         let links = store.bool(forKey: "links.show")
@@ -381,7 +381,9 @@ final class Preferences: ObservableObject {
         }
         conflict = conflict ?? shortcut.menuConflict(in: NSApp.mainMenu)
         if #available(macOS 15.4, *),
-           Extensions.shared.contexts.values.contains(where: { $0.command(for: event) != nil }) {
+           Extensions.shared.contexts.values.contains(where: { context in
+               context.commands.contains { ExtensionShortcut(key: $0.activationKey, flags: $0.modifierFlags) == ExtensionShortcut(event: event) }
+           }) {
             conflict = "an extension"
         }
         if let conflict {

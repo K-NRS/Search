@@ -28,7 +28,7 @@ struct Login: Identifiable, Equatable, Hashable {
 enum Vault {
     /// What every item of ours is tagged with. A test run tags its own, so a
     /// password saved while trying something never sits among the real ones.
-    private static let label = Store.world.map { "Search (\($0))" } ?? "Search"
+    private static let label = Store.world.map { "Search (\($0))" } ?? Store.profileName
 
     // MARK: - reading
 
@@ -140,6 +140,9 @@ enum Vault {
             kSecAttrAuthenticationType as String: kSecAttrAuthenticationTypeHTMLForm,
             kSecAttrProtocol as String: clear ? kSecAttrProtocolHTTP : kSecAttrProtocolHTTPS,
         ]
+        // The label restricts queries; the security domain also makes a fork's
+        // identical host/account a distinct keychain primary key on insertion.
+        if Store.profileName != "Search" { fields[kSecAttrSecurityDomain as String] = Store.profileName }
         if let used { fields[kSecAttrComment as String] = String(used.timeIntervalSince1970) }
 
         let status = SecItemUpdate(identity as CFDictionary, fields as CFDictionary)
