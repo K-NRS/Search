@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix='search-pref-tests-') as tmp:
     def write(domain, values):
         path = home / 'seed.plist'
         path.write_bytes(plistlib.dumps(values))
+        subprocess.run([DEFAULTS, 'delete', domain], capture_output=True)
         subprocess.run([DEFAULTS, 'import', domain, str(path)], check=True, capture_output=True)
 
     def read(domain):
