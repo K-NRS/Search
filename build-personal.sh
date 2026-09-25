@@ -39,7 +39,7 @@ PY
 # No Developer ID is impersonated and no notarization is claimed.
 codesign --force --sign - --entitlements Search.entitlements "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
-lipo -verify_arch arm64 x86_64 "$APP/Contents/MacOS/Search"
+lipo "$APP/Contents/MacOS/Search" -verify_arch arm64 x86_64
 file "$APP/Contents/MacOS/Search"
 ZIP='build/Search-Personal-universal.zip'
 rm -f "$ZIP"
