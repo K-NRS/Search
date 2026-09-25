@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='search-pref-tests-') as tmp:
                'chrome.blur', 'search.custom', 'shortcut.tab.next', 'downloads', 'downloads.ask'}
     expected = {**original, **{k: v for k, v in source_data.items() if k in allowed}}
     try:
-        check(read(source) is None and read(target) is None, 'unique domains begin empty')
+        check(not read(source) and not read(target), 'unique domains begin empty')
         write(source, source_data)
         write(target, original)
         execute('--dry-run')
@@ -107,11 +107,12 @@ with tempfile.TemporaryDirectory(prefix='search-pref-tests-') as tmp:
         subprocess.run([DEFAULTS, 'delete', source], check=True, capture_output=True)
         before_missing = read(target)
         execute(success=False)
-        check(read(target) == before_missing and read(source) is None, 'missing source fails closed')
+        check(read(target) == before_missing and not read(source), 'missing source fails closed')
         write(source, source_data)
         subprocess.run([DEFAULTS, 'delete', target], check=True, capture_output=True)
-        execute(success=False)
-        check(read(target) is None and read(source) == source_data, 'missing Personal domain fails closed')
+        execute()
+        check(read(target) == {k: v for k, v in source_data.items() if k in allowed} and read(source) == source_data,
+              'empty Personal domain is safely initialized with allowlisted preferences only')
     finally:
         for domain in (source, target):
             subprocess.run([DEFAULTS, 'delete', domain], capture_output=True)
